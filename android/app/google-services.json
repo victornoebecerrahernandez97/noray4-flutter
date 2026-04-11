@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "296589404935",
+    "project_id": "noray4-30789",
+    "storage_bucket": "noray4-30789.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:296589404935:android:9e1ba05c91fd96b81673a2",
+        "android_client_info": {
+          "package_name": "com.noray4.noray4"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "296589404935-bd685eatadkdnvto1mj79ht57ocjf09v.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noray4.noray4",
+            "certificate_hash": "1603ca83d6e7a230e7ba1e8fcf683c867e94896a"
+          }
+        },
+        {
+          "client_id": "296589404935-jujkds4oabk2qvcgcqltmbk2f125k6ff.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUBWLdD_nAsIcgfXYdc_RwddxP3ExEb_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "296589404935-jujkds4oabk2qvcgcqltmbk2f125k6ff.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
