@@ -47,25 +47,36 @@ class _VozTabState extends State<VozTab> with SingleTickerProviderStateMixin {
         children: [
           const SizedBox(height: Noray4Spacing.s4),
           // Status bar
-          _VoiceStatusBar(isActive: sala.isVoiceActive, wave: _wave),
+          _VoiceStatusBar(isActive: sala.isVoiceActive, wave: _wave, activeSpeakerName: sala.activeSpeakerName),
           const SizedBox(height: Noray4Spacing.s8),
           // Riders list
           Expanded(
             child: ListView.separated(
-              itemCount: sala.riders.length + 2,
+              itemCount: sala.riders.length + 1,
               separatorBuilder: (context, index) =>
                   const SizedBox(height: Noray4Spacing.s4),
               itemBuilder: (context, i) {
+                final sala = widget.sala;
                 if (i == 0) {
                   return _RiderVoiceRow(
-                      initials: 'Tú', isSpeaking: sala.isPttActive, isYou: true);
+                    initials: 'YO',
+                    displayName: 'Tú',
+                    isSpeaking: sala.isPttActive,
+                    isYou: true,
+                  );
                 }
-                if (i <= sala.riders.length) {
+                final idx = i - 1;
+                if (idx < sala.riders.length) {
+                  final rider = sala.riders[idx];
+                  final isSpeaking = rider.riderId != null &&
+                      rider.riderId == sala.activeSpeakerId;
                   return _RiderVoiceRow(
-                      initials: sala.riders[i - 1].initials,
-                      isSpeaking: i == 1);
+                    initials: rider.initials,
+                    displayName: rider.displayName ?? rider.initials,
+                    isSpeaking: isSpeaking,
+                  );
                 }
-                return _RiderVoiceRow(initials: 'RK', isSpeaking: false);
+                return const SizedBox.shrink();
               },
             ),
           ),
@@ -91,7 +102,8 @@ class _VozTabState extends State<VozTab> with SingleTickerProviderStateMixin {
 class _VoiceStatusBar extends StatelessWidget {
   final bool isActive;
   final AnimationController wave;
-  const _VoiceStatusBar({required this.isActive, required this.wave});
+  final String? activeSpeakerName;
+  const _VoiceStatusBar({required this.isActive, required this.wave, this.activeSpeakerName});
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +131,9 @@ class _VoiceStatusBar extends StatelessWidget {
           ),
           const SizedBox(width: Noray4Spacing.s4),
           Text(
-            isActive ? 'Canal de voz activo' : 'Canal de voz inactivo',
+            activeSpeakerName != null
+                ? '$activeSpeakerName habla...'
+                : (isActive ? 'Canal de voz activo' : 'Canal listo'),
             style: Noray4TextStyles.body.copyWith(
               color: Noray4Colors.darkOnSurfaceVariant,
             ),
@@ -143,10 +157,12 @@ class _VoiceStatusBar extends StatelessWidget {
 
 class _RiderVoiceRow extends StatelessWidget {
   final String initials;
+  final String? displayName;
   final bool isSpeaking;
   final bool isYou;
   const _RiderVoiceRow({
     required this.initials,
+    this.displayName,
     required this.isSpeaking,
     this.isYou = false,
   });
@@ -191,7 +207,7 @@ class _RiderVoiceRow extends StatelessWidget {
           const SizedBox(width: Noray4Spacing.s4),
           Expanded(
             child: Text(
-              isYou ? 'Tú' : initials,
+              isYou ? 'Tú' : (displayName ?? initials),
               style: Noray4TextStyles.body.copyWith(
                 color: Noray4Colors.darkPrimary,
                 fontWeight: isSpeaking ? FontWeight.w600 : FontWeight.w500,
