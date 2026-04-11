@@ -1,20 +1,17 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:noray4/core/auth/auth_provider.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
 import 'package:noray4/features/sala/models/sala_models.dart';
 
-// ─── Mock data (no GPS real todavía) ─────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const _cdmx = LatLng(19.4326, -99.1332);
-
-const _mockPositions = [
-  LatLng(19.4350, -99.1310), // isSelf
-  LatLng(19.4300, -99.1360),
-  LatLng(19.4380, -99.1280),
-  LatLng(19.4270, -99.1390),
-];
+const _defaultCenter = LatLng(19.4326, -99.1332);
 
 const _darkTileFilter = ColorFilter.matrix(<double>[
   -1, 0, 0, 0, 255,
@@ -25,7 +22,7 @@ const _darkTileFilter = ColorFilter.matrix(<double>[
 
 // ─── MapTab ───────────────────────────────────────────────────────────────────
 
-class MapTab extends StatefulWidget {
+class MapTab extends ConsumerStatefulWidget {
   final SalaState sala;
   final VoidCallback onPttPressed;
   final VoidCallback onPttReleased;
@@ -38,10 +35,11 @@ class MapTab extends StatefulWidget {
   });
 
   @override
-  State<MapTab> createState() => _MapTabState();
+  ConsumerState<MapTab> createState() => _MapTabState();
 }
 
-class _MapTabState extends State<MapTab> with SingleTickerProviderStateMixin {
+class _MapTabState extends ConsumerState<MapTab>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _voiceAnim;
   final _mapController = MapController();
 
@@ -61,42 +59,109 @@ class _MapTabState extends State<MapTab> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  String? get _myRiderId => ref.read(authProvider).user?.id;
+
+  Map<String, String> get _initialsMap {
+    return {
+      for (final r in widget.sala.riders)
+        if (r.riderId != null) r.riderId!: r.initials,
+    };
+  }
+
+  List<RiderPosition> get _activePositions => widget.sala.lastPositions.values
+      .where((p) => !p.isStale)
+      .toList();
+
+  // ── Map controls ──────────────────────────────────────────────────────────
+
   void _zoomIn() => _mapController.move(
       _mapController.camera.center, _mapController.camera.zoom + 1);
+
   void _zoomOut() => _mapController.move(
       _mapController.camera.center, _mapController.camera.zoom - 1);
-  void _resetCenter() => _mapController.move(_cdmx, 13);
+
+  void _centerOnMe() {
+    final myId = _myRiderId;
+    final pos = myId != null ? widget.sala.lastPositions[myId] : null;
+    if (pos != null && !pos.isStale) {
+      _mapController.move(LatLng(pos.lat, pos.lng), 15);
+    } else {
+      _mapController.move(_defaultCenter, 13);
+    }
+  }
+
+  void _fitAll() {
+    final positions = _activePositions;
+    if (positions.isEmpty) {
+      _mapController.move(_defaultCenter, 13);
+      return;
+    }
+    if (positions.length == 1) {
+      _mapController.move(LatLng(positions.first.lat, positions.first.lng), 14);
+      return;
+    }
+    final lats = positions.map((p) => p.lat);
+    final lngs = positions.map((p) => p.lng);
+    final bounds = LatLngBounds(
+      LatLng(lats.reduce(min), lngs.reduce(min)),
+      LatLng(lats.reduce(max), lngs.reduce(max)),
+    );
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(64),
+      ),
+    );
+  }
+
+  // ── Markers ───────────────────────────────────────────────────────────────
 
   List<Marker> _buildMarkers() {
-    final riders = widget.sala.riders;
-    return List.generate(_mockPositions.length, (i) {
-      final initials =
-          i < riders.length ? riders[i].initials : (i == 0 ? 'YO' : '+');
+    final myId = _myRiderId;
+    final initials = _initialsMap;
+    return _activePositions.map((pos) {
+      final isSelf = myId != null && pos.riderId == myId;
+      final label = isSelf
+          ? 'YO'
+          : (initials[pos.riderId] ?? pos.riderId.substring(0, 2).toUpperCase());
+      final heading = pos.heading;
+      final hasHeading = heading != null && heading >= 0;
+      Widget marker = _RiderMarker(initials: label, isSelf: isSelf);
+      if (hasHeading) {
+        marker = Transform.rotate(
+          angle: heading * pi / 180,
+          child: marker,
+        );
+      }
       return Marker(
-        point: _mockPositions[i],
+        point: LatLng(pos.lat, pos.lng),
         width: 40,
         height: 40,
-        child: _RiderMarker(initials: initials, isSelf: i == 0),
+        child: marker,
       );
-    });
+    }).toList();
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    final sala = widget.sala;
     return Stack(
       children: [
-        // ── Mapa real OSM con filtro oscuro ──────────────────────────────────
+        // ── Mapa OSM con filtro oscuro ───────────────────────────────────────
         FlutterMap(
           mapController: _mapController,
           options: const MapOptions(
-            initialCenter: _cdmx,
+            initialCenter: _defaultCenter,
             initialZoom: 13,
           ),
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.noray4.app',
-              // Filtro por tile → los markers no se ven afectados
               tileBuilder: (context, tile, _) => ColorFiltered(
                 colorFilter: _darkTileFilter,
                 child: tile,
@@ -105,24 +170,33 @@ class _MapTabState extends State<MapTab> with SingleTickerProviderStateMixin {
             MarkerLayer(markers: _buildMarkers()),
           ],
         ),
-        // ── Zoom controls ─────────────────────────────────────────────────────
+        // ── GPS off banner ───────────────────────────────────────────────────
+        if (!sala.gpsActive)
+          Positioned(
+            top: 16,
+            left: 16,
+            child: _GpsBanner(),
+          ),
+        // ── Map controls ────────────────────────────────────────────────────
         Positioned(
           top: 16,
           right: 16,
           child: _ZoomControls(
             onZoomIn: _zoomIn,
             onZoomOut: _zoomOut,
-            onCenter: _resetCenter,
+            onCenterMe: _centerOnMe,
+            onFitAll: _fitAll,
           ),
         ),
-        // ── Bottom metrics + PTT ──────────────────────────────────────────────
+        // ── Bottom metrics + PTT ─────────────────────────────────────────────
         Positioned(
           left: 0,
           right: 0,
           bottom: 0,
           child: _BottomPanel(
-            sala: widget.sala,
+            sala: sala,
             voiceAnim: _voiceAnim,
+            activeCount: _activePositions.length,
             onPttPressed: widget.onPttPressed,
             onPttReleased: widget.onPttReleased,
           ),
@@ -148,9 +222,7 @@ class _RiderMarker extends StatelessWidget {
             ? Noray4Colors.darkPrimary
             : Noray4Colors.darkSurfaceContainerHighest,
         border: Border.all(
-          color: isSelf
-              ? Noray4Colors.darkPrimary.withValues(alpha: 0.4)
-              : Noray4Colors.darkOutlineVariant,
+          color: isSelf ? Colors.white : Noray4Colors.darkOutlineVariant,
           width: isSelf ? 2 : 0.5,
         ),
       ),
@@ -158,12 +230,47 @@ class _RiderMarker extends StatelessWidget {
         child: Text(
           initials,
           style: Noray4TextStyles.bodySmall.copyWith(
-            color:
-                isSelf ? const Color(0xFF131312) : Noray4Colors.darkPrimary,
+            color: isSelf
+                ? const Color(0xFF131312)
+                : Noray4Colors.darkPrimary,
             fontWeight: FontWeight.w700,
             fontSize: 11,
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── GPS Off Banner ───────────────────────────────────────────────────────────
+
+class _GpsBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: Noray4Spacing.s4, vertical: Noray4Spacing.s2),
+      decoration: BoxDecoration(
+        color: Noray4Colors.darkSurfaceContainerHigh.withValues(alpha: 0.9),
+        borderRadius: Noray4Radius.secondary,
+        border: Border.all(
+          color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.4),
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Symbols.location_off,
+              size: 16, color: Noray4Colors.darkOnSurfaceVariant),
+          const SizedBox(width: Noray4Spacing.s2),
+          Text(
+            'GPS inactivo',
+            style: Noray4TextStyles.bodySmall.copyWith(
+              color: Noray4Colors.darkOnSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -174,12 +281,14 @@ class _RiderMarker extends StatelessWidget {
 class _ZoomControls extends StatelessWidget {
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
-  final VoidCallback onCenter;
+  final VoidCallback onCenterMe;
+  final VoidCallback onFitAll;
 
   const _ZoomControls({
     required this.onZoomIn,
     required this.onZoomOut,
-    required this.onCenter,
+    required this.onCenterMe,
+    required this.onFitAll,
   });
 
   @override
@@ -187,10 +296,12 @@ class _ZoomControls extends StatelessWidget {
     return Column(
       children: [
         _ZoomBtn(icon: Symbols.add, onTap: onZoomIn),
-        const SizedBox(height: 8),
+        const SizedBox(height: Noray4Spacing.s2),
         _ZoomBtn(icon: Symbols.remove, onTap: onZoomOut),
-        const SizedBox(height: 8),
-        _ZoomBtn(icon: Symbols.near_me, onTap: onCenter),
+        const SizedBox(height: Noray4Spacing.s2),
+        _ZoomBtn(icon: Symbols.near_me, onTap: onCenterMe),
+        const SizedBox(height: Noray4Spacing.s2),
+        _ZoomBtn(icon: Symbols.fit_screen, onTap: onFitAll),
       ],
     );
   }
@@ -227,12 +338,14 @@ class _ZoomBtn extends StatelessWidget {
 class _BottomPanel extends StatelessWidget {
   final SalaState sala;
   final AnimationController voiceAnim;
+  final int activeCount;
   final VoidCallback onPttPressed;
   final VoidCallback onPttReleased;
 
   const _BottomPanel({
     required this.sala,
     required this.voiceAnim,
+    required this.activeCount,
     required this.onPttPressed,
     required this.onPttReleased,
   });
@@ -255,14 +368,19 @@ class _BottomPanel extends StatelessWidget {
               Expanded(
                   child: _MetricCard(
                       label: 'RIDERS',
-                      value: '${sala.riders.length + 5} online')),
+                      value: '$activeCount online')),
             ],
           ),
           const SizedBox(height: Noray4Spacing.s4),
-          _RidersRow(riders: sala.riders, voiceAnim: voiceAnim),
+          _RidersRow(
+            riders: sala.riders,
+            voiceAnim: voiceAnim,
+            activeSpeakerName: sala.activeSpeakerName,
+          ),
           const SizedBox(height: Noray4Spacing.s4),
           _PttButton(
             isActive: sala.isPttActive,
+            activeSpeakerName: sala.activeSpeakerName,
             onPressed: onPttPressed,
             onReleased: onPttReleased,
           ),
@@ -299,7 +417,7 @@ class _MetricCard extends StatelessWidget {
               fontSize: 9,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: Noray4Spacing.s1),
           Text(
             value,
             style: Noray4TextStyles.headlineM.copyWith(
@@ -316,7 +434,13 @@ class _MetricCard extends StatelessWidget {
 class _RidersRow extends StatelessWidget {
   final List<SalaRider> riders;
   final AnimationController voiceAnim;
-  const _RidersRow({required this.riders, required this.voiceAnim});
+  final String? activeSpeakerName;
+
+  const _RidersRow({
+    required this.riders,
+    required this.voiceAnim,
+    required this.activeSpeakerName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -342,10 +466,6 @@ class _RidersRow extends StatelessWidget {
                     left: i * 28.0,
                     child: _Avatar(initials: riders[i].initials),
                   ),
-                Positioned(
-                  left: riders.length * 28.0,
-                  child: const _Avatar(initials: '+5'),
-                ),
               ],
             ),
           ),
@@ -361,9 +481,9 @@ class _RidersRow extends StatelessWidget {
                       .withValues(alpha: 0.4 + voiceAnim.value * 0.6),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Noray4Spacing.s2),
               Text(
-                'Voz activa',
+                activeSpeakerName ?? 'Canal listo',
                 style: Noray4TextStyles.body.copyWith(
                   color: Noray4Colors.darkOnSurfaceVariant,
                 ),
@@ -406,14 +526,22 @@ class _Avatar extends StatelessWidget {
 
 class _PttButton extends StatelessWidget {
   final bool isActive;
+  final String? activeSpeakerName;
   final VoidCallback onPressed;
   final VoidCallback onReleased;
 
   const _PttButton({
     required this.isActive,
+    required this.activeSpeakerName,
     required this.onPressed,
     required this.onReleased,
   });
+
+  String get _label {
+    if (isActive) return 'Hablando...';
+    if (activeSpeakerName != null) return activeSpeakerName!;
+    return 'Hablar';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -438,7 +566,7 @@ class _PttButton extends StatelessWidget {
                   fill: 1, size: 24, color: Color(0xFF1A1C1C)),
               const SizedBox(width: 12),
               Text(
-                'Hablar',
+                _label,
                 style: Noray4TextStyles.headlineM.copyWith(
                   color: const Color(0xFF1A1C1C),
                   fontWeight: FontWeight.w700,
