@@ -63,6 +63,38 @@ class SalaRider {
   }
 }
 
+class RiderPosition {
+  final String riderId;
+  final double lat;
+  final double lng;
+  final double? heading;
+  final double? speed;
+  final DateTime updatedAt;
+
+  const RiderPosition({
+    required this.riderId,
+    required this.lat,
+    required this.lng,
+    this.heading,
+    this.speed,
+    required this.updatedAt,
+  });
+
+  factory RiderPosition.fromJson(String riderId, Map<String, dynamic> json) =>
+      RiderPosition(
+        riderId: riderId,
+        lat: (json['lat'] as num).toDouble(),
+        lng: (json['lng'] as num).toDouble(),
+        heading: (json['heading'] as num?)?.toDouble(),
+        speed: (json['speed'] as num?)?.toDouble(),
+        updatedAt: DateTime.tryParse(json['timestamp'] as String? ?? '') ??
+            DateTime.now(),
+      );
+
+  bool get isStale =>
+      DateTime.now().difference(updatedAt).inSeconds > 30;
+}
+
 class SalaState {
   final String salaId;
   final String nombre;
@@ -75,6 +107,12 @@ class SalaState {
   final bool isVoiceActive;
   final bool isLoading;
   final String? error;
+  // ── Tiempo real ─────────────────────────────────────────────────────────────
+  final Map<String, RiderPosition> lastPositions;
+  final String? activeSpeakerId;
+  final String? activeSpeakerName;
+  final bool wsConnected;
+  final bool gpsActive;
 
   const SalaState({
     required this.salaId,
@@ -88,6 +126,11 @@ class SalaState {
     this.isVoiceActive = true,
     this.isLoading = false,
     this.error,
+    this.lastPositions = const {},
+    this.activeSpeakerId,
+    this.activeSpeakerName,
+    this.wsConnected = false,
+    this.gpsActive = false,
   });
 
   SalaState copyWith({
@@ -101,6 +144,12 @@ class SalaState {
     String? distancia,
     bool? isLoading,
     String? error,
+    Map<String, RiderPosition>? lastPositions,
+    String? activeSpeakerId,
+    bool clearActiveSpeaker = false,
+    String? activeSpeakerName,
+    bool? wsConnected,
+    bool? gpsActive,
   }) =>
       SalaState(
         salaId: salaId,
@@ -114,5 +163,10 @@ class SalaState {
         isVoiceActive: isVoiceActive ?? this.isVoiceActive,
         isLoading: isLoading ?? this.isLoading,
         error: error,
+        lastPositions: lastPositions ?? this.lastPositions,
+        activeSpeakerId: clearActiveSpeaker ? null : (activeSpeakerId ?? this.activeSpeakerId),
+        activeSpeakerName: clearActiveSpeaker ? null : (activeSpeakerName ?? this.activeSpeakerName),
+        wsConnected: wsConnected ?? this.wsConnected,
+        gpsActive: gpsActive ?? this.gpsActive,
       );
 }
