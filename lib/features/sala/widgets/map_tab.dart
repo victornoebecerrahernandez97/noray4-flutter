@@ -4,203 +4,351 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:material_symbols_icons/symbols.dart';
-import 'package:noray4/core/auth/auth_provider.dart';
+import 'package:remixicon/remixicon.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
-import 'package:noray4/features/sala/models/sala_models.dart';
+import 'package:noray4/features/sala/providers/map_provider.dart';
+import 'package:noray4/features/sala/providers/sala_provider.dart';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Public constants ────────────────────────────────────────────────────────
 
-const _defaultCenter = LatLng(19.4326, -99.1332);
+const kGreen = Color(0xFF34C759);
+const kAccentRed = Color(0xFFFF3B30);
 
-const _darkTileFilter = ColorFilter.matrix(<double>[
-  -1, 0, 0, 0, 255,
-   0,-1, 0, 0, 255,
-   0, 0,-1, 0, 255,
-   0, 0, 0, 1,   0,
-]);
+const kRiderColors = [
+  Color(0xFF4A90E2),
+  Color(0xFFF5A623),
+  Color(0xFF7ED321),
+  Color(0xFF9B59B6),
+  Color(0xFFE74C3C),
+  Color(0xFF1ABC9C),
+];
+
+Color riderColor(String riderId) {
+  final hash = riderId.codeUnits.fold(0, (a, b) => a + b);
+  return kRiderColors[hash % kRiderColors.length];
+}
+
+// ─── MapTabController ─────────────────────────────────────────────────────────
+
+class MapTabController {
+  void Function() centerOnMe = () {};
+  void Function() fitAll = () {};
+}
+
+// ─── Internals ────────────────────────────────────────────────────────────────
+
+const _kDefaultCenter = LatLng(19.4326, -99.1332);
+
+class _RiderAnim {
+  final AnimationController controller;
+  LatLng from;
+  LatLng to;
+
+  _RiderAnim({required this.controller, required this.from, required this.to});
+
+  LatLng get current => LatLng(
+        from.latitude + (to.latitude - from.latitude) * controller.value,
+        from.longitude + (to.longitude - from.longitude) * controller.value,
+      );
+}
 
 // ─── MapTab ───────────────────────────────────────────────────────────────────
 
 class MapTab extends ConsumerStatefulWidget {
-  final SalaState sala;
-  final VoidCallback onPttPressed;
-  final VoidCallback onPttReleased;
+  final String salaId;
+  final MapTabController? controller;
 
-  const MapTab({
-    super.key,
-    required this.sala,
-    required this.onPttPressed,
-    required this.onPttReleased,
-  });
+  const MapTab({super.key, required this.salaId, this.controller});
 
   @override
   ConsumerState<MapTab> createState() => _MapTabState();
 }
 
-class _MapTabState extends ConsumerState<MapTab>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _voiceAnim;
+class _MapTabState extends ConsumerState<MapTab> with TickerProviderStateMixin {
   final _mapController = MapController();
+  final _riderAnims = <String, _RiderAnim>{};
+  final _animatedPositions = ValueNotifier<Map<String, LatLng>>({});
+  bool _mapReady = false;
+
+  ProviderSubscription<Map<String, MapRiderPosition>>? _ridersSub;
+  ProviderSubscription<LatLng?>? _myPosSub;
 
   @override
   void initState() {
     super.initState();
-    _voiceAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    )..repeat(reverse: true);
+    widget.controller?.centerOnMe = _centerOnMe;
+    widget.controller?.fitAll = _fitAll;
+
+    _ridersSub = ref.listenManual(
+      mapProvider(widget.salaId).select((s) => s.riders),
+      (prev, next) => _onRidersChanged(prev ?? {}, next),
+      fireImmediately: true,
+    );
+    _myPosSub = ref.listenManual(
+      mapProvider(widget.salaId).select((s) => s.myPosition),
+      (_, pos) => _onMyPositionChanged(pos),
+    );
   }
 
   @override
   void dispose() {
-    _voiceAnim.dispose();
+    _ridersSub?.close();
+    _myPosSub?.close();
+    for (final a in _riderAnims.values) {
+      a.controller.dispose();
+    }
+    _animatedPositions.dispose();
     _mapController.dispose();
     super.dispose();
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Rider animation ───────────────────────────────────────────────────────
 
-  String? get _myRiderId => ref.read(authProvider).user?.id;
+  void _onRidersChanged(
+    Map<String, MapRiderPosition> prev,
+    Map<String, MapRiderPosition> next,
+  ) {
+    final newPos = Map<String, LatLng>.from(_animatedPositions.value);
 
-  Map<String, String> get _initialsMap {
-    return {
-      for (final r in widget.sala.riders)
-        if (r.riderId != null) r.riderId!: r.initials,
-    };
+    for (final entry in next.entries) {
+      final id = entry.key;
+      final rider = entry.value;
+
+      if (!_riderAnims.containsKey(id)) {
+        final ctrl = AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 800),
+        )..addListener(() {
+            if (!mounted) return;
+            final anim = _riderAnims[id];
+            if (anim == null) return;
+            final updated =
+                Map<String, LatLng>.from(_animatedPositions.value);
+            updated[id] = anim.current;
+            _animatedPositions.value = updated;
+          });
+        _riderAnims[id] = _RiderAnim(
+          controller: ctrl,
+          from: rider.position,
+          to: rider.position,
+        );
+        newPos[id] = rider.position;
+      } else if (rider.previousPosition != null &&
+          rider.previousPosition != rider.position) {
+        final anim = _riderAnims[id]!;
+        anim.from =
+            _animatedPositions.value[id] ?? rider.previousPosition!;
+        anim.to = rider.position;
+        anim.controller.forward(from: 0);
+      }
+    }
+
+    _riderAnims.keys
+        .where((id) => !next.containsKey(id))
+        .toList()
+        .forEach((id) {
+      _riderAnims[id]!.controller.dispose();
+      _riderAnims.remove(id);
+      newPos.remove(id);
+    });
+
+    if (mounted) _animatedPositions.value = newPos;
   }
 
-  List<RiderPosition> get _activePositions => widget.sala.lastPositions.values
-      .where((p) => !p.isStale)
-      .toList();
+  // ── Auto-follow ───────────────────────────────────────────────────────────
 
-  // ── Map controls ──────────────────────────────────────────────────────────
+  void _onMyPositionChanged(LatLng? pos) {
+    if (!_mapReady || pos == null) return;
+    if (ref.read(mapProvider(widget.salaId)).autoFollow) {
+      _mapController.move(pos, _mapController.camera.zoom);
+    }
+  }
 
-  void _zoomIn() => _mapController.move(
-      _mapController.camera.center, _mapController.camera.zoom + 1);
+  void _onMapEvent(MapEvent event) {
+    if (event is MapEventMoveStart &&
+        event.source == MapEventSource.dragStart) {
+      ref.read(mapProvider(widget.salaId).notifier).disableAutoFollow();
+    }
+  }
 
-  void _zoomOut() => _mapController.move(
-      _mapController.camera.center, _mapController.camera.zoom - 1);
+  // ── Camera ────────────────────────────────────────────────────────────────
 
   void _centerOnMe() {
-    final myId = _myRiderId;
-    final pos = myId != null ? widget.sala.lastPositions[myId] : null;
-    if (pos != null && !pos.isStale) {
-      _mapController.move(LatLng(pos.lat, pos.lng), 15);
-    } else {
-      _mapController.move(_defaultCenter, 13);
+    if (!_mapReady) return;
+    final s = ref.read(mapProvider(widget.salaId));
+    if (s.myPosition != null) _mapController.move(s.myPosition!, 15);
+    if (!s.autoFollow) {
+      ref.read(mapProvider(widget.salaId).notifier).toggleAutoFollow();
     }
   }
 
   void _fitAll() {
-    final positions = _activePositions;
-    if (positions.isEmpty) {
-      _mapController.move(_defaultCenter, 13);
+    if (!_mapReady) return;
+    ref.read(mapProvider(widget.salaId).notifier).disableAutoFollow();
+    final riders =
+        ref.read(mapProvider(widget.salaId)).riders.values.where((r) => r.isOnline).toList();
+    if (riders.isEmpty) {
+      _mapController.move(_kDefaultCenter, 13);
       return;
     }
-    if (positions.length == 1) {
-      _mapController.move(LatLng(positions.first.lat, positions.first.lng), 14);
+    if (riders.length == 1) {
+      _mapController.move(riders.first.position, 15);
       return;
     }
-    final lats = positions.map((p) => p.lat);
-    final lngs = positions.map((p) => p.lng);
-    final bounds = LatLngBounds(
-      LatLng(lats.reduce(min), lngs.reduce(min)),
-      LatLng(lats.reduce(max), lngs.reduce(max)),
-    );
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: bounds,
-        padding: const EdgeInsets.all(64),
+    final lats = riders.map((r) => r.position.latitude);
+    final lngs = riders.map((r) => r.position.longitude);
+    _mapController.fitCamera(CameraFit.bounds(
+      bounds: LatLngBounds(
+        LatLng(lats.reduce(min), lngs.reduce(min)),
+        LatLng(lats.reduce(max), lngs.reduce(max)),
       ),
-    );
+      padding: const EdgeInsets.all(80),
+    ));
   }
 
   // ── Markers ───────────────────────────────────────────────────────────────
 
-  List<Marker> _buildMarkers() {
-    final myId = _myRiderId;
-    final initials = _initialsMap;
-    return _activePositions.map((pos) {
-      final isSelf = myId != null && pos.riderId == myId;
-      final label = isSelf
-          ? 'YO'
-          : (initials[pos.riderId] ?? pos.riderId.substring(0, 2).toUpperCase());
-      final heading = pos.heading;
-      final hasHeading = heading != null && heading >= 0;
-      Widget marker = _RiderMarker(initials: label, isSelf: isSelf);
-      if (hasHeading) {
-        marker = Transform.rotate(
-          angle: heading * pi / 180,
-          child: marker,
-        );
-      }
+  List<Marker> _buildRiderMarkers(
+    Map<String, MapRiderPosition> riders,
+    Map<String, LatLng> animPos,
+    bool isPttActive,
+    String? activeSpeakerId,
+  ) {
+    return riders.values.map((rider) {
+      final pos = animPos[rider.riderId] ?? rider.position;
+      final isSpeaking = isPttActive && rider.isMe;
       return Marker(
-        point: LatLng(pos.lat, pos.lng),
-        width: 40,
-        height: 40,
-        child: marker,
+        point: pos,
+        width: 52,
+        height: 52,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showRiderSheet(rider),
+          child: _RiderMarkerWidget(
+            rider: rider,
+            isSpeaking: isSpeaking,
+          ),
+        ),
       );
     }).toList();
+  }
+
+  Marker _buildDestinationMarker(LatLng dest) => Marker(
+        point: dest,
+        width: 40,
+        height: 52,
+        alignment: Alignment.bottomCenter,
+        child: GestureDetector(
+          onTap: () => _showDestinationSheet(dest),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: const BoxDecoration(
+                  color: kGreen,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(RemixIcons.flag_line,
+                    size: 18, color: Colors.black),
+              ),
+              Container(width: 2, height: 16, color: kGreen),
+            ],
+          ),
+        ),
+      );
+
+  void _showRiderSheet(MapRiderPosition rider) {
+    final myPos = ref.read(mapProvider(widget.salaId)).myPosition;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _RiderSheet(rider: rider, myPosition: myPos),
+    );
+  }
+
+  void _showDestinationSheet(LatLng dest) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _DestinationSheet(
+        dest: dest,
+        onClear: () {
+          Navigator.of(context).pop();
+          ref
+              .read(mapProvider(widget.salaId).notifier)
+              .clearDestination();
+        },
+      ),
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final sala = widget.sala;
-    return Stack(
+    final mapState = ref.watch(mapProvider(widget.salaId));
+    final isPttActive = ref.watch(
+      salaProvider(widget.salaId).select((s) => s.isPttActive),
+    );
+    final activeSpeakerId = ref.watch(
+      salaProvider(widget.salaId).select((s) => s.activeSpeakerId),
+    );
+
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: mapState.myPosition ?? _kDefaultCenter,
+        initialZoom: 14,
+        onMapReady: () => setState(() => _mapReady = true),
+        onMapEvent: _onMapEvent,
+      ),
       children: [
-        // ── Mapa OSM con filtro oscuro ───────────────────────────────────────
-        FlutterMap(
-          mapController: _mapController,
-          options: const MapOptions(
-            initialCenter: _defaultCenter,
-            initialZoom: 13,
-          ),
-          children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.noray4.app',
-              tileBuilder: (context, tile, _) => ColorFiltered(
-                colorFilter: _darkTileFilter,
-                child: tile,
-              ),
+        // Layer 1: CartoDB dark tiles (no filter needed)
+        TileLayer(
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+          subdomains: const ['a', 'b', 'c', 'd'],
+          userAgentPackageName: 'com.noray4.noray4',
+          maxZoom: 19,
+        ),
+        // Layer 2: OSRM route
+        if (mapState.routePolyline.isNotEmpty)
+          PolylineLayer(polylines: [
+            Polyline(
+              points: mapState.routePolyline,
+              color: Colors.white.withValues(alpha: 0.5),
+              strokeWidth: 3,
             ),
-            MarkerLayer(markers: _buildMarkers()),
-          ],
-        ),
-        // ── GPS off banner ───────────────────────────────────────────────────
-        if (!sala.gpsActive)
-          Positioned(
-            top: 16,
-            left: 16,
-            child: _GpsBanner(),
+          ]),
+        // Layer 3: Destination line
+        if (mapState.destination != null && mapState.myPosition != null)
+          PolylineLayer(polylines: [
+            Polyline(
+              points: [mapState.myPosition!, mapState.destination!],
+              color: kGreen.withValues(alpha: 0.8),
+              strokeWidth: 2,
+            ),
+          ]),
+        // Layer 4: Destination marker
+        if (mapState.destination != null)
+          MarkerLayer(
+            markers: [_buildDestinationMarker(mapState.destination!)],
           ),
-        // ── Map controls ────────────────────────────────────────────────────
-        Positioned(
-          top: 16,
-          right: 16,
-          child: _ZoomControls(
-            onZoomIn: _zoomIn,
-            onZoomOut: _zoomOut,
-            onCenterMe: _centerOnMe,
-            onFitAll: _fitAll,
-          ),
-        ),
-        // ── Bottom metrics + PTT ─────────────────────────────────────────────
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: _BottomPanel(
-            sala: sala,
-            voiceAnim: _voiceAnim,
-            activeCount: _activePositions.length,
-            onPttPressed: widget.onPttPressed,
-            onPttReleased: widget.onPttReleased,
+        // Layer 5: Rider markers (animated)
+        ValueListenableBuilder<Map<String, LatLng>>(
+          valueListenable: _animatedPositions,
+          builder: (ctx, animPos, _) => MarkerLayer(
+            markers: _buildRiderMarkers(
+              mapState.riders,
+              animPos,
+              isPttActive,
+              activeSpeakerId,
+            ),
           ),
         ),
+        // Layer 6: POIs — próximo sprint
       ],
     );
   }
@@ -208,181 +356,196 @@ class _MapTabState extends ConsumerState<MapTab>
 
 // ─── Rider Marker ─────────────────────────────────────────────────────────────
 
-class _RiderMarker extends StatelessWidget {
-  final String initials;
-  final bool isSelf;
-  const _RiderMarker({required this.initials, required this.isSelf});
+class _RiderMarkerWidget extends StatelessWidget {
+  final MapRiderPosition rider;
+  final bool isSpeaking;
+
+  const _RiderMarkerWidget({required this.rider, this.isSpeaking = false});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final borderColor = isSpeaking
+        ? kAccentRed
+        : (rider.isMe ? Colors.white : riderColor(rider.riderId));
+    const bgColor = Color(0xFF1C1C1E);
+    final borderWidth = rider.isMe ? 3.0 : 1.5;
+    final circleSize = rider.isMe ? 44.0 : 40.0;
+    final showArrow =
+        rider.heading != null && (rider.speed ?? 0) > 2;
+
+    Widget circle = Container(
+      width: circleSize,
+      height: circleSize,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: isSelf
-            ? Noray4Colors.darkPrimary
-            : Noray4Colors.darkSurfaceContainerHighest,
-        border: Border.all(
-          color: isSelf ? Colors.white : Noray4Colors.darkOutlineVariant,
-          width: isSelf ? 2 : 0.5,
-        ),
+        color: bgColor,
+        border: Border.all(color: borderColor, width: borderWidth),
+        boxShadow: isSpeaking
+            ? [
+                BoxShadow(
+                  color: kAccentRed.withValues(alpha: 0.3),
+                  blurRadius: 10,
+                  spreadRadius: 2,
+                ),
+              ]
+            : (rider.isMe
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : null),
       ),
       child: Center(
         child: Text(
-          initials,
-          style: Noray4TextStyles.bodySmall.copyWith(
-            color: isSelf
-                ? const Color(0xFF131312)
-                : Noray4Colors.darkPrimary,
+          rider.initials,
+          style: TextStyle(
+            color: Noray4Colors.darkPrimary,
+            fontSize: rider.isMe ? 13 : 11,
             fontWeight: FontWeight.w700,
-            fontSize: 11,
+            letterSpacing: -0.3,
           ),
         ),
       ),
     );
-  }
-}
 
-// ─── GPS Off Banner ───────────────────────────────────────────────────────────
+    if (!rider.isOnline) circle = Opacity(opacity: 0.4, child: circle);
 
-class _GpsBanner extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: Noray4Spacing.s4, vertical: Noray4Spacing.s2),
-      decoration: BoxDecoration(
-        color: Noray4Colors.darkSurfaceContainerHigh.withValues(alpha: 0.9),
-        borderRadius: Noray4Radius.secondary,
-        border: Border.all(
-          color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.4),
-          width: 0.5,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+    if (!showArrow) return circle;
+
+    const frameSize = 52.0;
+    return SizedBox.square(
+      dimension: frameSize,
+      child: Stack(
+        alignment: Alignment.center,
         children: [
-          Icon(Symbols.location_off,
-              size: 16, color: Noray4Colors.darkOnSurfaceVariant),
-          const SizedBox(width: Noray4Spacing.s2),
-          Text(
-            'GPS inactivo',
-            style: Noray4TextStyles.bodySmall.copyWith(
-              color: Noray4Colors.darkOnSurfaceVariant,
+          Transform.rotate(
+            angle: rider.heading! * pi / 180,
+            child: SizedBox.square(
+              dimension: frameSize,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Container(
+                  width: 6,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: borderColor,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(3),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
+          circle,
         ],
       ),
     );
   }
 }
 
-// ─── Zoom Controls ────────────────────────────────────────────────────────────
+// ─── Rider Sheet ──────────────────────────────────────────────────────────────
 
-class _ZoomControls extends StatelessWidget {
-  final VoidCallback onZoomIn;
-  final VoidCallback onZoomOut;
-  final VoidCallback onCenterMe;
-  final VoidCallback onFitAll;
+class _RiderSheet extends StatelessWidget {
+  final MapRiderPosition rider;
+  final LatLng? myPosition;
 
-  const _ZoomControls({
-    required this.onZoomIn,
-    required this.onZoomOut,
-    required this.onCenterMe,
-    required this.onFitAll,
-  });
+  const _RiderSheet({required this.rider, this.myPosition});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _ZoomBtn(icon: Symbols.add, onTap: onZoomIn),
-        const SizedBox(height: Noray4Spacing.s2),
-        _ZoomBtn(icon: Symbols.remove, onTap: onZoomOut),
-        const SizedBox(height: Noray4Spacing.s2),
-        _ZoomBtn(icon: Symbols.near_me, onTap: onCenterMe),
-        const SizedBox(height: Noray4Spacing.s2),
-        _ZoomBtn(icon: Symbols.fit_screen, onTap: onFitAll),
-      ],
-    );
-  }
-}
+    const dist = Distance();
+    final distKm = myPosition != null
+        ? dist.as(LengthUnit.Kilometer, myPosition!, rider.position)
+        : null;
+    final speedStr = (rider.speed != null && rider.speed! >= 0)
+        ? '${(rider.speed! * 3.6).round()} km/h'
+        : '—';
+    final distStr =
+        distKm != null ? '${distKm.toStringAsFixed(1)} km' : '—';
 
-class _ZoomBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _ZoomBtn({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: const Color(0xCC2A2A29),
-          borderRadius: Noray4Radius.secondary,
-          border: Border.all(
-            color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.3),
-            width: 0.5,
-          ),
+    return Container(
+      decoration: const BoxDecoration(
+        color: Noray4Colors.darkSurfaceContainerHigh,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        border: Border(
+          top: BorderSide(
+              color: Noray4Colors.darkOutlineVariant, width: 0.5),
         ),
-        child: Icon(icon, size: 22, color: Noray4Colors.darkOnSurface),
       ),
-    );
-  }
-}
-
-// ─── Bottom Panel ─────────────────────────────────────────────────────────────
-
-class _BottomPanel extends StatelessWidget {
-  final SalaState sala;
-  final AnimationController voiceAnim;
-  final int activeCount;
-  final VoidCallback onPttPressed;
-  final VoidCallback onPttReleased;
-
-  const _BottomPanel({
-    required this.sala,
-    required this.voiceAnim,
-    required this.activeCount,
-    required this.onPttPressed,
-    required this.onPttReleased,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-          Noray4Spacing.s6, 0, Noray4Spacing.s6, Noray4Spacing.s6),
+      padding: EdgeInsets.fromLTRB(
+        Noray4Spacing.s6,
+        Noray4Spacing.s4,
+        Noray4Spacing.s6,
+        Noray4Spacing.s6 + MediaQuery.of(context).padding.bottom,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Noray4Colors.darkOutlineVariant,
+              borderRadius: Noray4Radius.pill,
+            ),
+          ),
+          const SizedBox(height: Noray4Spacing.s6),
           Row(
             children: [
-              Expanded(child: _MetricCard(label: 'TIEMPO', value: sala.tiempo)),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Noray4Colors.darkSurfaceContainerHighest,
+                  border: Border.all(
+                    color: rider.isMe
+                        ? Colors.white
+                        : riderColor(rider.riderId),
+                    width: 2,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    rider.initials,
+                    style: Noray4TextStyles.body.copyWith(
+                      color: Noray4Colors.darkPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(width: Noray4Spacing.s4),
-              Expanded(
-                  child: _MetricCard(label: 'DIST.', value: sala.distancia)),
-              const SizedBox(width: Noray4Spacing.s4),
-              Expanded(
-                  child: _MetricCard(
-                      label: 'RIDERS',
-                      value: '$activeCount online')),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    rider.isMe ? 'Tú' : rider.initials,
+                    style: Noray4TextStyles.headlineM
+                        .copyWith(color: Noray4Colors.darkPrimary),
+                  ),
+                  Text(
+                    rider.isOnline ? 'En línea' : 'Sin señal',
+                    style: Noray4TextStyles.bodySmall.copyWith(
+                        color: Noray4Colors.darkOnSurfaceVariant),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: Noray4Spacing.s4),
-          _RidersRow(
-            riders: sala.riders,
-            voiceAnim: voiceAnim,
-            activeSpeakerName: sala.activeSpeakerName,
-          ),
-          const SizedBox(height: Noray4Spacing.s4),
-          _PttButton(
-            isActive: sala.isPttActive,
-            activeSpeakerName: sala.activeSpeakerName,
-            onPressed: onPttPressed,
-            onReleased: onPttReleased,
+          const SizedBox(height: Noray4Spacing.s6),
+          Row(
+            children: [
+              Expanded(
+                  child: _SheetStat(label: 'VELOCIDAD', value: speedStr)),
+              const SizedBox(width: Noray4Spacing.s4),
+              Expanded(
+                  child: _SheetStat(label: 'DISTANCIA', value: distStr)),
+            ],
           ),
         ],
       ),
@@ -390,191 +553,129 @@ class _BottomPanel extends StatelessWidget {
   }
 }
 
-class _MetricCard extends StatelessWidget {
+class _SheetStat extends StatelessWidget {
   final String label;
   final String value;
-  const _MetricCard({required this.label, required this.value});
+  const _SheetStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(Noray4Spacing.s4),
       decoration: BoxDecoration(
-        color: Noray4Colors.darkSurfaceContainerLow.withValues(alpha: 0.8),
-        borderRadius: Noray4Radius.primary,
+        color: Noray4Colors.darkSurfaceContainerHighest,
+        borderRadius: Noray4Radius.secondary,
         border: Border.all(
-          color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.2),
+          color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.3),
           width: 0.5,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: Noray4TextStyles.label.copyWith(
-              color: Noray4Colors.darkOnSurfaceVariant,
-              fontSize: 9,
-            ),
-          ),
+          Text(label,
+              style: Noray4TextStyles.label.copyWith(
+                  color: Noray4Colors.darkOnSurfaceVariant, fontSize: 9)),
           const SizedBox(height: Noray4Spacing.s1),
-          Text(
-            value,
-            style: Noray4TextStyles.headlineM.copyWith(
-              color: Noray4Colors.darkPrimary,
-              fontSize: 18,
-            ),
-          ),
+          Text(value,
+              style: Noray4TextStyles.headlineM.copyWith(
+                  color: Noray4Colors.darkPrimary, fontSize: 16)),
         ],
       ),
     );
   }
 }
 
-class _RidersRow extends StatelessWidget {
-  final List<SalaRider> riders;
-  final AnimationController voiceAnim;
-  final String? activeSpeakerName;
+// ─── Destination Sheet ────────────────────────────────────────────────────────
 
-  const _RidersRow({
-    required this.riders,
-    required this.voiceAnim,
-    required this.activeSpeakerName,
-  });
+class _DestinationSheet extends StatelessWidget {
+  final LatLng dest;
+  final VoidCallback onClear;
+  const _DestinationSheet({required this.dest, required this.onClear});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(Noray4Spacing.s4),
-      decoration: BoxDecoration(
-        color: Noray4Colors.darkSurfaceContainerLow.withValues(alpha: 0.8),
-        borderRadius: Noray4Radius.primary,
-        border: Border.all(
-          color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.2),
-          width: 0.5,
+      decoration: const BoxDecoration(
+        color: Noray4Colors.darkSurfaceContainerHigh,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        border: Border(
+          top: BorderSide(
+              color: Noray4Colors.darkOutlineVariant, width: 0.5),
         ),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: EdgeInsets.fromLTRB(
+        Noray4Spacing.s6,
+        Noray4Spacing.s4,
+        Noray4Spacing.s6,
+        Noray4Spacing.s6 + MediaQuery.of(context).padding.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            height: 40,
-            child: Stack(
-              children: [
-                for (int i = 0; i < riders.length; i++)
-                  Positioned(
-                    left: i * 28.0,
-                    child: _Avatar(initials: riders[i].initials),
-                  ),
-              ],
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Noray4Colors.darkOutlineVariant,
+              borderRadius: Noray4Radius.pill,
             ),
           ),
+          const SizedBox(height: Noray4Spacing.s6),
           Row(
             children: [
-              AnimatedBuilder(
-                animation: voiceAnim,
-                builder: (context, child) => Icon(
-                  Symbols.graphic_eq,
-                  fill: 1,
-                  size: 22,
-                  color: Noray4Colors.darkOnSurfaceVariant
-                      .withValues(alpha: 0.4 + voiceAnim.value * 0.6),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: kGreen.withValues(alpha: 0.12),
+                  borderRadius: Noray4Radius.secondary,
+                  border: Border.all(
+                      color: kGreen.withValues(alpha: 0.4), width: 0.5),
                 ),
+                child:
+                    const Icon(RemixIcons.flag_line, size: 20, color: kGreen),
               ),
-              const SizedBox(width: Noray4Spacing.s2),
-              Text(
-                activeSpeakerName ?? 'Canal listo',
-                style: Noray4TextStyles.body.copyWith(
-                  color: Noray4Colors.darkOnSurfaceVariant,
+              const SizedBox(width: Noray4Spacing.s4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Destino marcado',
+                        style: Noray4TextStyles.headlineM
+                            .copyWith(color: Noray4Colors.darkPrimary)),
+                    Text(
+                      '${dest.latitude.toStringAsFixed(5)}, '
+                      '${dest.longitude.toStringAsFixed(5)}',
+                      style: Noray4TextStyles.bodySmall.copyWith(
+                          color: Noray4Colors.darkOnSurfaceVariant),
+                    ),
+                  ],
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: Noray4Spacing.s6),
+          GestureDetector(
+            onTap: onClear,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: Noray4Radius.primary,
+                border: Border.all(
+                    color: Noray4Colors.darkOutlineVariant, width: 0.5),
+              ),
+              child: Center(
+                child: Text(
+                  'Quitar destino',
+                  style: Noray4TextStyles.body.copyWith(
+                      color: Noray4Colors.darkOnSurfaceVariant),
+                ),
+              ),
+            ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _Avatar extends StatelessWidget {
-  final String initials;
-  const _Avatar({required this.initials});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: Noray4Colors.darkSurfaceContainerHighest,
-        shape: BoxShape.circle,
-        border: Border.all(
-            color: Noray4Colors.darkSurfaceContainerLow, width: 2),
-      ),
-      child: Center(
-        child: Text(
-          initials,
-          style: Noray4TextStyles.bodySmall.copyWith(
-            color: Noray4Colors.darkPrimary,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PttButton extends StatelessWidget {
-  final bool isActive;
-  final String? activeSpeakerName;
-  final VoidCallback onPressed;
-  final VoidCallback onReleased;
-
-  const _PttButton({
-    required this.isActive,
-    required this.activeSpeakerName,
-    required this.onPressed,
-    required this.onReleased,
-  });
-
-  String get _label {
-    if (isActive) return 'Hablando...';
-    if (activeSpeakerName != null) return activeSpeakerName!;
-    return 'Hablar';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => onPressed(),
-      onTapUp: (_) => onReleased(),
-      onTapCancel: onReleased,
-      child: AnimatedScale(
-        scale: isActive ? 0.98 : 1.0,
-        duration: const Duration(milliseconds: 100),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          decoration: BoxDecoration(
-            color: Noray4Colors.darkPrimary,
-            borderRadius: Noray4Radius.primary,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Symbols.mic,
-                  fill: 1, size: 24, color: Color(0xFF1A1C1C)),
-              const SizedBox(width: 12),
-              Text(
-                _label,
-                style: Noray4TextStyles.headlineM.copyWith(
-                  color: const Color(0xFF1A1C1C),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
