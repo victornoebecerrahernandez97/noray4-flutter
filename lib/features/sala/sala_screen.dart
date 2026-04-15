@@ -1085,7 +1085,7 @@ class _ChannelPills extends StatelessWidget {
 
 // ─── PTT Button ───────────────────────────────────────────────────────────────
 
-class _PttButton extends StatelessWidget {
+class _PttButton extends StatefulWidget {
   final bool isActive;
   final String? activeSpeakerName;
   final AnimationController pulseCtrl;
@@ -1099,6 +1099,23 @@ class _PttButton extends StatelessWidget {
     required this.onDown,
     required this.onUp,
   });
+
+  @override
+  State<_PttButton> createState() => _PttButtonState();
+}
+
+class _PttButtonState extends State<_PttButton> {
+  bool _isPressed = false;
+
+  void _handleDown(PointerDownEvent _) {
+    setState(() => _isPressed = true);
+    widget.onDown();
+  }
+
+  void _handleUp(PointerEvent _) {
+    setState(() => _isPressed = false);
+    widget.onUp();
+  }
 
   Widget _ring(double t) {
     final scale = 1.0 + t * 0.8;
@@ -1118,67 +1135,74 @@ class _PttButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => onDown(),
-      onTapUp: (_) => onUp(),
-      onTapCancel: onUp,
-      child: AnimatedBuilder(
-        animation: pulseCtrl,
-        builder: (ctx, _) {
-          final t1 = pulseCtrl.value;
-          final t2 = (pulseCtrl.value + 0.5) % 1.0;
+    // Muestra estado activo inmediatamente al presionar (no espera confirmación del servidor)
+    final showing = _isPressed || widget.isActive;
 
-          return SizedBox(
-            width: 96,
-            height: 96,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (isActive) ...[_ring(t1), _ring(t2)],
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  width: isActive ? 80 : 72,
-                  height: isActive ? 80 : 72,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: isActive
-                        ? _kAccentRed
-                        : Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(
-                      color: isActive
+    return Listener(
+      onPointerDown: _handleDown,
+      onPointerUp: _handleUp,
+      onPointerCancel: _handleUp,
+      child: AnimatedScale(
+        scale: _isPressed ? 0.93 : 1.0,
+        duration: const Duration(milliseconds: 80),
+        child: AnimatedBuilder(
+          animation: widget.pulseCtrl,
+          builder: (ctx, _) {
+            final t1 = widget.pulseCtrl.value;
+            final t2 = (widget.pulseCtrl.value + 0.5) % 1.0;
+
+            return SizedBox(
+              width: 96,
+              height: 96,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (showing) ...[_ring(t1), _ring(t2)],
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 80),
+                    width: showing ? 80 : 72,
+                    height: showing ? 80 : 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: showing
                           ? _kAccentRed
-                          : Colors.white.withValues(alpha: 0.6),
-                      width: 2,
+                          : Colors.white.withValues(alpha: 0.08),
+                      border: Border.all(
+                        color: showing
+                            ? _kAccentRed
+                            : Colors.white.withValues(alpha: 0.6),
+                        width: 2,
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          showing
+                              ? RemixIcons.mic_fill
+                              : RemixIcons.mic_line,
+                          size: 28,
+                          color: Colors.white,
+                        ),
+                        if (showing) ...[
+                          const SizedBox(height: 2),
+                          const Text(
+                            '● ●',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 8,
+                              fontFamily: 'Courier',
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        isActive
-                            ? RemixIcons.mic_fill
-                            : RemixIcons.mic_line,
-                        size: 28,
-                        color: Colors.white,
-                      ),
-                      if (isActive) ...[
-                        const SizedBox(height: 2),
-                        const Text(
-                          '● ●',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 8,
-                            fontFamily: 'Courier',
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1240,11 +1264,40 @@ class _RidersRowVoz extends StatelessWidget {
 
 // ─── Chat content ─────────────────────────────────────────────────────────────
 
-class _ChatContent extends StatelessWidget {
+class _ChatContent extends StatefulWidget {
   final SalaState sala;
   final SalaNotifier notifier;
 
   const _ChatContent({required this.sala, required this.notifier});
+
+  @override
+  State<_ChatContent> createState() => _ChatContentState();
+}
+
+class _ChatContentState extends State<_ChatContent> {
+  final _scrollCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_ChatContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sala.messages.length != widget.sala.messages.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollCtrl.hasClients) {
+          _scrollCtrl.animateTo(
+            0,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1252,18 +1305,19 @@ class _ChatContent extends StatelessWidget {
       children: [
         Expanded(
           child: ListView.separated(
+            controller: _scrollCtrl,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             reverse: true,
-            itemCount: sala.messages.length,
+            itemCount: widget.sala.messages.length,
             separatorBuilder: (_, _) =>
                 const SizedBox(height: Noray4Spacing.s4),
             itemBuilder: (_, i) {
-              final msgs = sala.messages.reversed.toList();
+              final msgs = widget.sala.messages.reversed.toList();
               return ChatBubble(message: msgs[i]);
             },
           ),
         ),
-        ChatInputBar(onSend: notifier.sendMessage),
+        ChatInputBar(onSend: widget.notifier.sendMessage),
         const SizedBox(height: 4),
       ],
     );

@@ -86,7 +86,18 @@ class _MapTabState extends ConsumerState<MapTab> with TickerProviderStateMixin {
     );
     _myPosSub = ref.listenManual(
       mapProvider(widget.salaId).select((s) => s.myPosition),
-      (_, pos) => _onMyPositionChanged(pos),
+      (prev, pos) {
+        if (prev == null && pos != null) {
+          // Primera posición GPS recibida — centrar cámara sin esperar interacción
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_mapReady && mounted) {
+              _mapController.move(pos, 14);
+            }
+          });
+        }
+        _onMyPositionChanged(pos);
+      },
+      fireImmediately: true,
     );
   }
 
@@ -305,13 +316,14 @@ class _MapTabState extends ConsumerState<MapTab> with TickerProviderStateMixin {
         onMapEvent: _onMapEvent,
       ),
       children: [
-        // Layer 1: CartoDB dark tiles (no filter needed)
+        // Layer 1: CartoDB dark tiles
         TileLayer(
           urlTemplate:
               'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
           subdomains: const ['a', 'b', 'c', 'd'],
           userAgentPackageName: 'com.noray4.noray4',
           maxZoom: 19,
+          retinaMode: RetinaMode.isHighDensity(context),
         ),
         // Layer 2: OSRM route
         if (mapState.routePolyline.isNotEmpty)
