@@ -87,6 +87,17 @@ class WebSocketManager {
     _reconnectTimer = Timer(delay, connect);
   }
 
+  /// Envía un frame JSON upstream por el canal WS activo.
+  /// No-op si el canal está cerrado o el manager fue disposed.
+  void send(Map<String, dynamic> frame) {
+    if (_disposed || _channel == null) return;
+    try {
+      _channel!.sink.add(jsonEncode(frame));
+    } catch (_) {
+      // Canal cerrado entre la comprobación y el envío — ignorar
+    }
+  }
+
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
