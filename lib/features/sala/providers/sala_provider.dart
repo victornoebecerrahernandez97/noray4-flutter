@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:noray4/core/auth/auth_provider.dart';
 import 'package:noray4/features/sala/models/sala_models.dart';
 import 'package:noray4/features/sala/models/ws_events.dart';
+import 'package:noray4/features/sala/services/audio_service.dart';
 import 'package:noray4/features/sala/services/chat_service.dart';
 import 'package:noray4/features/sala/services/location_service.dart';
 import 'package:noray4/features/sala/services/salas_service.dart';
@@ -20,6 +22,7 @@ class SalaNotifier extends StateNotifier<SalaState> {
   late final WebSocketManager _ws;
   late final LocationService _location;
   late final VoiceService _voice;
+  late final AudioService _audio;
 
   StreamSubscription<WsEvent>? _wsSub;
   StreamSubscription<WsStatus>? _wsStatusSub;
@@ -38,6 +41,7 @@ class SalaNotifier extends StateNotifier<SalaState> {
       myRiderId: _myRiderId,
       onPttStateChanged: _handlePttState,
     );
+    _audio = AudioService();
     _init();
   }
 
@@ -86,6 +90,7 @@ class SalaNotifier extends StateNotifier<SalaState> {
 
     _connectWebSocket();
     _location.start();
+    _audio.init().ignore();
   }
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
@@ -146,7 +151,9 @@ class SalaNotifier extends StateNotifier<SalaState> {
         break;
 
       case AudioEvent():
-        break; // TODO(T6): feed AudioService
+        if (event.riderId != _myRiderId && event.data.isNotEmpty) {
+          _audio.feedFrame(base64Decode(event.data));
+        }
 
       case GenericEvent():
         break;
@@ -170,12 +177,23 @@ class SalaNotifier extends StateNotifier<SalaState> {
 
   void _handlePttState(PttState pttState) {
     final isMe = pttState.speakerId == _myRiderId;
+    final wasSpeaking = state.isPttActive;
+
     state = state.copyWith(
       isPttActive: isMe && pttState.isSpeaking,
       activeSpeakerId: pttState.isSpeaking ? pttState.speakerId : null,
       activeSpeakerName: pttState.isSpeaking ? pttState.speakerName : null,
       clearActiveSpeaker: !pttState.isSpeaking,
     );
+
+    if (isMe && pttState.isSpeaking && !wasSpeaking) {
+      _audio.startRecording(
+        canalId: 'general',
+        onFrame: _ws.send,
+      );
+    } else if (isMe && !pttState.isSpeaking && wasSpeaking) {
+      _audio.stopRecording();
+    }
   }
 
   // ── Acciones públicas ─────────────────────────────────────────────────────
@@ -237,6 +255,7 @@ class SalaNotifier extends StateNotifier<SalaState> {
     _ws.dispose();
     _location.stop();
     _voice.dispose();
+    _audio.dispose().ignore();
     super.dispose();
   }
 }
