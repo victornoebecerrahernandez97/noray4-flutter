@@ -47,6 +47,7 @@ dependencies:
   geolocator: ^13.0.2
   permission_handler: ^11.0.0
   remixicon: ^1.0.2
+  flutter_sound: ^9.15.10
 
 dev_dependencies:
   flutter_test:
