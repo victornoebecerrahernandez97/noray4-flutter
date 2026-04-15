@@ -145,6 +145,9 @@ class SalaNotifier extends StateNotifier<SalaState> {
       case PresenciaEvent():
         break;
 
+      case AudioEvent():
+        break; // TODO(T6): feed AudioService
+
       case GenericEvent():
         break;
     }

@@ -90,6 +90,29 @@ class PresenciaEvent extends WsEvent {
       );
 }
 
+// ─── Audio relay ─────────────────────────────────────────────────────────────
+
+class AudioEvent extends WsEvent {
+  final String riderId;
+  final String displayName;
+  final String canalId;
+  final String data; // base64 PCM 16-bit 16kHz mono
+
+  AudioEvent({
+    required this.riderId,
+    required this.displayName,
+    required this.canalId,
+    required this.data,
+  });
+
+  factory AudioEvent.fromJson(Map<String, dynamic> json) => AudioEvent(
+        riderId: json['rider_id'] as String? ?? '',
+        displayName: json['display_name'] as String? ?? '',
+        canalId: json['canal_id'] as String? ?? 'general',
+        data: json['data'] as String? ?? '',
+      );
+}
+
 // ─── Evento genérico ──────────────────────────────────────────────────────────
 
 class GenericEvent extends WsEvent {
@@ -101,6 +124,15 @@ class GenericEvent extends WsEvent {
 // ─── Parser de envelope ───────────────────────────────────────────────────────
 
 WsEvent? parseWsEnvelope(Map<String, dynamic> envelope) {
+  // Audio frames arrive directly without MQTT topic wrapper
+  if (envelope['type'] == 'audio') {
+    try {
+      return AudioEvent.fromJson(envelope);
+    } catch (_) {
+      return null;
+    }
+  }
+
   final topic = envelope['topic'] as String? ?? '';
   final payload = envelope['payload'] as Map<String, dynamic>? ?? {};
 
