@@ -31,7 +31,7 @@ class _StatCell extends StatelessWidget {
     return AspectRatio(
       aspectRatio: 1,
       child: Container(
-        padding: const EdgeInsets.all(Noray4Spacing.s4 + 4),
+        padding: const EdgeInsets.all(Noray4Spacing.s4),
         decoration: BoxDecoration(
           color: Noray4Colors.darkSurfaceContainerLow,
           borderRadius: Noray4Radius.primary,
@@ -44,16 +44,28 @@ class _StatCell extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              stat.valor,
-              style: Noray4TextStyles.headlineL.copyWith(
-                color: Noray4Colors.darkPrimary,
-                fontWeight: FontWeight.w300,
-                letterSpacing: -0.03 * 32,
+            Expanded(
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.topLeft,
+                  child: Text(
+                    stat.valor,
+                    maxLines: 1,
+                    style: Noray4TextStyles.headlineL.copyWith(
+                      color: Noray4Colors.darkPrimary,
+                      fontWeight: FontWeight.w300,
+                      letterSpacing: -0.03 * 32,
+                    ),
+                  ),
+                ),
               ),
             ),
             Text(
               stat.label.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Noray4TextStyles.label.copyWith(
                 color: Noray4Colors.darkSecondary,
                 fontSize: 9,

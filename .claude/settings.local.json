@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter analyze:*)",
+      "Bash(flutter test:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git commit:*)",
+      "Bash(flutter pub:*)",
+      "Bash(git -C \"C:\\\\Users\\\\becerra\\\\Documents\\\\startup\\\\noray4\\\\noray4_flutter\" add android/app/src/main/AndroidManifest.xml pubspec.yaml pubspec.lock)",
+      "Bash(git -C 'C:\\\\Users\\\\becerra\\\\Documents\\\\startup\\\\noray4\\\\noray4_flutter' commit -m ':*)",
+      "Bash(flutter build:*)",
+      "Bash(python -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "Bash(python3 -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "Bash(git -C \"C:/Users/becerra/Documents/startup/noray4/noray4-fastapi\" log --oneline -5)",
+      "Bash(git -C \"C:/Users/becerra/Documents/startup/noray4/noray4-fastapi\" remote -v)",
+      "Bash(git *)"
+    ]
+  }
+}

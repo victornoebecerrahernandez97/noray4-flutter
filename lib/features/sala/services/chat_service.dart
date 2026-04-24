@@ -131,4 +131,21 @@ class ChatService {
       'public_id': res.data['public_id'] as String,
     };
   }
+
+  /// Envía un mensaje tipo imagen. Flujo: uploadMedia primero, luego este método.
+  Future<MensajeOut> sendImageMessage(
+    String salaId,
+    String mediaUrl,
+    String mediaThumbUrl,
+  ) async {
+    final res = await _dio.post(
+      ApiEndpoints.chatMensajes(salaId),
+      data: {
+        'type': 'image',
+        'media_url': mediaUrl,
+        'media_thumb_url': mediaThumbUrl,
+      },
+    );
+    return MensajeOut.fromJson(res.data as Map<String, dynamic>);
+  }
 }

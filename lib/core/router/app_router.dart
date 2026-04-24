@@ -32,7 +32,10 @@ class _RouterNotifier extends ChangeNotifier {
     if (auth.isLoading) return null;
     final isOnboarding = state.matchedLocation.startsWith('/onboarding');
     if (!auth.onboardingDone && !isOnboarding) return '/onboarding';
-    if (auth.onboardingDone && isOnboarding) return '/home';
+    if (auth.pendingAvatarSetup && !isOnboarding) return '/onboarding';
+    if (auth.onboardingDone && !auth.pendingAvatarSetup && isOnboarding) {
+      return '/home';
+    }
     return null;
   }
 }

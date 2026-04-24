@@ -1,11 +1,18 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
 
 class ChatInputBar extends StatefulWidget {
   final ValueChanged<String> onSend;
-  const ChatInputBar({super.key, required this.onSend});
+  final Future<void> Function(String filePath)? onSendImage;
+
+  const ChatInputBar({
+    super.key,
+    required this.onSend,
+    this.onSendImage,
+  });
 
   @override
   State<ChatInputBar> createState() => _ChatInputBarState();
@@ -13,11 +20,29 @@ class ChatInputBar extends StatefulWidget {
 
 class _ChatInputBarState extends State<ChatInputBar> {
   final _controller = TextEditingController();
+  bool _sending = false;
 
   void _submit() {
-    if (_controller.text.trim().isEmpty) return;
+    final text = _controller.text.trim();
+    if (text.isEmpty || text.length > 4000) return;
     widget.onSend(_controller.text);
     _controller.clear();
+  }
+
+  Future<void> _pickImage() async {
+    if (widget.onSendImage == null) return;
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _sending = true);
+    try {
+      await widget.onSendImage!(picked.path);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   @override
@@ -57,26 +82,42 @@ class _ChatInputBarState extends State<ChatInputBar> {
             ),
             child: Row(
               children: [
-                _IconBtn(icon: Symbols.add, onTap: () {}),
+                _sending
+                    ? const SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Center(
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: Noray4Colors.darkSecondary,
+                            ),
+                          ),
+                        ),
+                      )
+                    : _IconBtn(icon: Symbols.add, onTap: _pickImage),
                 Expanded(
                   child: TextField(
                     controller: _controller,
                     style: Noray4TextStyles.body.copyWith(
                       color: Noray4Colors.darkPrimary,
                     ),
+                    maxLength: 4000,
                     decoration: InputDecoration(
                       hintText: 'Mensaje expedición...',
                       hintStyle: Noray4TextStyles.body.copyWith(
                         color: Noray4Colors.darkOnSurfaceVariant,
                       ),
                       border: InputBorder.none,
+                      counterText: '',
                       contentPadding:
                           const EdgeInsets.symmetric(horizontal: 8),
                     ),
                     onSubmitted: (_) => _submit(),
                   ),
                 ),
-                _IconBtn(icon: Symbols.mic, onTap: () {}),
                 const SizedBox(width: 4),
                 _SendBtn(onTap: _submit),
               ],

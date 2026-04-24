@@ -1,3 +1,4 @@
+import 'dart:math' show max;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ import 'package:noray4/features/sala/widgets/archivos_tab.dart';
 import 'package:noray4/features/sala/widgets/chat_bubble.dart';
 import 'package:noray4/features/sala/widgets/chat_input_bar.dart';
 import 'package:noray4/features/sala/widgets/map_tab.dart';
+import 'package:noray4/shared/widgets/rider_avatar.dart';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -98,16 +100,26 @@ class _SalaScreenState extends ConsumerState<SalaScreen> {
     );
     if (confirmed != true || !mounted) return;
 
-    final amarre = Amarre(
+    final notifier = ref.read(salaProvider(widget.salaId).notifier);
+    final mapState = ref.read(mapProvider(widget.salaId));
+
+    // Intenta cerrar en backend y obtener el amarre real
+    Amarre? amarre = await notifier.closeSalaAndGetAmarre();
+
+    // Fallback si el backend falla o el rider no es admin
+    amarre ??= Amarre(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       nombre: _nombre(sala),
       fecha: DateTime.now(),
-      km: 87,
-      duracion: '2h 34m',
-      participantes: ['@noe', '@rider_mx', '@moto_cdmx'],
+      km: mapState.distanceTraveled.round(),
+      duracion: sala.tiempo,
+      participantes: sala.riders
+          .map((r) => r.displayName ?? r.initials)
+          .toList(),
       zona: 'Reciente',
     );
 
+    if (!mounted) return;
     ref.read(amarresProvider.notifier).addAmarre(amarre);
     await N4Haptics.heavy();
     if (!mounted) return;
@@ -208,6 +220,9 @@ class _HeaderSala extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final riders =
         ref.watch(salaProvider(salaId).select((s) => s.riders));
+    final onlineCount = ref.watch(
+        salaProvider(salaId).select((s) => s.onlineRiderIds.length));
+    final totalCount = max(onlineCount, riders.length);
     final topPad = MediaQuery.of(context).padding.top;
 
     return _blur(
@@ -247,16 +262,17 @@ class _HeaderSala extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            // Riders pill
-            if (riders.isNotEmpty) ...[
+            // Riders pill — muestra online en tiempo real, fallback a lista estática
+            if (riders.isNotEmpty || onlineCount > 0) ...[
               Container(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: kGreen.withValues(alpha: 0.15),
+                  color: Noray4Colors.darkAccent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                      color: kGreen.withValues(alpha: 0.6), width: 0.5),
+                      color: Noray4Colors.darkAccent.withValues(alpha: 0.6),
+                      width: 0.5),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -265,15 +281,17 @@ class _HeaderSala extends ConsumerWidget {
                       width: 7,
                       height: 7,
                       decoration: const BoxDecoration(
-                        color: kGreen,
+                        color: Noray4Colors.darkAccent,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      '${riders.length} riders',
+                      onlineCount < totalCount
+                          ? '$onlineCount/$totalCount riders'
+                          : '$totalCount riders',
                       style: const TextStyle(
-                        color: kGreen,
+                        color: Noray4Colors.darkAccent,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         letterSpacing: -0.2,
@@ -420,6 +438,8 @@ class _MapFABs extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final autoFollow =
         ref.watch(mapProvider(salaId).select((s) => s.autoFollow));
+    final groupFollow =
+        ref.watch(mapProvider(salaId).select((s) => s.groupFollow));
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -432,6 +452,7 @@ class _MapFABs extends ConsumerWidget {
         const SizedBox(height: 8),
         _FabBtn(
           icon: RemixIcons.group_line,
+          active: groupFollow,
           onTap: mapCtrl.fitAll,
         ),
         const SizedBox(height: 8),
@@ -621,6 +642,8 @@ class _CollapsedBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final riders =
         ref.watch(salaProvider(salaId).select((s) => s.riders));
+    final onlineRiderIds =
+        ref.watch(salaProvider(salaId).select((s) => s.onlineRiderIds));
 
     const tabs = [
       (SalaTab.mapa, RemixIcons.map_2_line),
@@ -669,7 +692,7 @@ class _CollapsedBar extends ConsumerWidget {
                 }).toList(),
               ),
               // Mini avatars overlapping
-              _MiniAvatarsRow(riders: riders),
+              _MiniAvatarsRow(riders: riders, onlineRiderIds: onlineRiderIds),
             ],
           ),
         ],
@@ -680,7 +703,11 @@ class _CollapsedBar extends ConsumerWidget {
 
 class _MiniAvatarsRow extends StatelessWidget {
   final List<SalaRider> riders;
-  const _MiniAvatarsRow({required this.riders});
+  final Set<String> onlineRiderIds;
+  const _MiniAvatarsRow({
+    required this.riders,
+    required this.onlineRiderIds,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -692,26 +719,29 @@ class _MiniAvatarsRow extends StatelessWidget {
       child: Stack(
         children: shown.asMap().entries.map((e) {
           final rider = e.value;
-          final color = rider.riderId != null
-              ? riderColor(rider.riderId!)
-              : _kSecondary;
+          final isOnline =
+              rider.riderId != null && onlineRiderIds.contains(rider.riderId);
+          final color = (rider.riderId != null
+                  ? riderColor(rider.riderId!)
+                  : _kSecondary)
+              .withValues(alpha: isOnline ? 1.0 : 0.3);
           return Positioned(
             left: e.key * 16.0,
-            child: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF1C1C1E),
-                border: Border.all(color: color, width: 1.5),
-              ),
-              child: Center(
-                child: Text(
-                  rider.initials,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w700),
+            child: Opacity(
+              opacity: isOnline ? 1.0 : 0.5,
+              child: Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color, width: 1.5),
+                ),
+                padding: const EdgeInsets.all(1),
+                child: RiderAvatarCircle(
+                  riderId: rider.riderId,
+                  initials: rider.initials,
+                  size: 20,
+                  fontSize: 8,
                 ),
               ),
             ),
@@ -843,10 +873,17 @@ class _MetricsRow extends ConsumerWidget {
     final dist = ref.watch(
         mapProvider(sala.salaId).select((s) => s.distanceTraveled));
 
+    final onlineCount = ref.watch(
+        salaProvider(sala.salaId).select((s) => s.onlineRiderIds.length));
+    final totalCount = max(onlineCount, sala.riders.length);
+    final ridersLabel = onlineCount < totalCount && totalCount > 0
+        ? '$onlineCount/$totalCount'
+        : '$totalCount';
+
     final metrics = [
       (speed != null ? '${speed.round()}' : '—', 'KM/H'),
       (dist.toStringAsFixed(1), 'KM'),
-      ('${sala.riders.length}', 'RIDERS'),
+      (ridersLabel, 'RIDERS'),
       (sala.tiempo, 'TIEMPO'),
     ];
 
@@ -982,9 +1019,12 @@ class _TabContent extends StatelessWidget {
       case SalaTab.chat:
         return _ChatContent(sala: sala, notifier: notifier);
       case SalaTab.archivos:
-        return const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: ArchivosTab(),
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: ArchivosTab(
+            fotos: sala.fotos,
+            onUploadFoto: notifier.uploadSalaFoto,
+          ),
         );
     }
   }
@@ -1006,75 +1046,115 @@ class _VozContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Channel pills
-          _ChannelPills(activeChannel: 'General'),
-          const SizedBox(height: 12),
-          // PTT button with pulse rings
-          _PttButton(
-            isActive: sala.isPttActive,
-            activeSpeakerName: sala.activeSpeakerName,
-            pulseCtrl: pulseCtrl,
-            onDown: () => notifier.setPtt(true),
-            onUp: () => notifier.setPtt(false),
+          // ── Columna izquierda: canales ──────────────────────────────────
+          SizedBox(
+            width: 110,
+            child: _ChannelPillsVertical(activeChannel: 'General'),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Mantén para hablar',
-            style: const TextStyle(
-              color: _kSecondary,
-              fontSize: 12,
-              fontWeight: FontWeight.w400,
+          // ── Centro: botón PTT ───────────────────────────────────────────
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _PttButton(
+                  isActive: sala.isPttActive,
+                  activeSpeakerName: sala.activeSpeakerName,
+                  pulseCtrl: pulseCtrl,
+                  onDown: () => notifier.setPtt(true),
+                  onUp: () => notifier.setPtt(false),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  sala.activeSpeakerName != null
+                      ? sala.activeSpeakerName!
+                      : 'Mantén para hablar',
+                  style: TextStyle(
+                    color: sala.activeSpeakerName != null
+                        ? Colors.white
+                        : _kSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 10),
-          // Riders row
-          _RidersRowVoz(riders: sala.riders),
+          // ── Columna derecha: riders ─────────────────────────────────────
+          SizedBox(
+            width: 44,
+            child: _RidersColVoz(
+              riders: sala.riders,
+              onlineRiderIds: sala.onlineRiderIds,
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-// ─── Channel pills ────────────────────────────────────────────────────────────
+// ─── Channel pills verticales ─────────────────────────────────────────────────
 
-class _ChannelPills extends StatelessWidget {
+class _ChannelPillsVertical extends StatelessWidget {
   final String activeChannel;
-  const _ChannelPills({required this.activeChannel});
+  const _ChannelPillsVertical({required this.activeChannel});
 
   @override
   Widget build(BuildContext context) {
-    const channels = ['General', 'Canal 2'];
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    const channels = ['General', 'Líderes', 'Emergencia'];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: channels.map((ch) {
         final isActive = ch == activeChannel;
         return GestureDetector(
           onTap: () {},
           child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: isActive ? Colors.white : Colors.transparent,
-              borderRadius: BorderRadius.circular(20),
+              color: isActive
+                  ? Noray4Colors.darkAccent
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(999),
               border: Border.all(
                 color: isActive
-                    ? Colors.white
+                    ? Noray4Colors.darkAccent
                     : Colors.white.withValues(alpha: 0.15),
                 width: 0.5,
               ),
             ),
-            child: Text(
-              ch,
-              style: TextStyle(
-                color: isActive ? const Color(0xFF0A0A0A) : _kSecondary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  ch,
+                  style: TextStyle(
+                    color: isActive ? const Color(0xFF0C1C20) : _kSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                if (isActive) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    '✓',
+                    style: const TextStyle(
+                      color: Color(0xFF0C1C20),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         );
@@ -1208,53 +1288,43 @@ class _PttButtonState extends State<_PttButton> {
   }
 }
 
-// ─── Riders row (Voz tab) ─────────────────────────────────────────────────────
+// ─── Riders column (Voz tab) ──────────────────────────────────────────────────
 
-class _RidersRowVoz extends StatelessWidget {
+class _RidersColVoz extends StatelessWidget {
   final List<SalaRider> riders;
-  const _RidersRowVoz({required this.riders});
+  final Set<String> onlineRiderIds;
+  const _RidersColVoz({required this.riders, required this.onlineRiderIds});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: riders.take(6).map((rider) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: riders.take(5).map((rider) {
         final color = rider.riderId != null
             ? riderColor(rider.riderId!)
             : _kSecondary;
+        final isOnline =
+            rider.riderId != null && onlineRiderIds.contains(rider.riderId);
         return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 5),
-          child: Column(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF1C1C1E),
-                  border: Border.all(color: color, width: 1.5),
-                ),
-                child: Center(
-                  child: Text(
-                    rider.initials,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: kGreen.withValues(alpha: 0.8),
-                ),
-              ),
-            ],
+          margin: const EdgeInsets.only(bottom: 6),
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isOnline ? color : color.withValues(alpha: 0.35),
+              width: 1.5,
+            ),
+          ),
+          padding: const EdgeInsets.all(1.5),
+          child: Opacity(
+            opacity: isOnline ? 1.0 : 0.6,
+            child: RiderAvatarCircle(
+              riderId: rider.riderId,
+              initials: rider.initials,
+              size: 30,
+              fontSize: 10,
+            ),
           ),
         );
       }).toList(),
@@ -1313,11 +1383,18 @@ class _ChatContentState extends State<_ChatContent> {
                 const SizedBox(height: Noray4Spacing.s4),
             itemBuilder: (_, i) {
               final msgs = widget.sala.messages.reversed.toList();
-              return ChatBubble(message: msgs[i]);
+              return ChatBubble(
+                message: msgs[i],
+                onDelete: widget.notifier.deleteMessage,
+                onEdit: widget.notifier.editMessage,
+              );
             },
           ),
         ),
-        ChatInputBar(onSend: widget.notifier.sendMessage),
+        ChatInputBar(
+          onSend: widget.notifier.sendMessage,
+          onSendImage: widget.notifier.sendImage,
+        ),
         const SizedBox(height: 4),
       ],
     );

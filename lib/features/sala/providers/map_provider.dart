@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:noray4/core/auth/auth_provider.dart';
@@ -39,7 +40,10 @@ class MapState {
   final Map<String, MapRiderPosition> riders;
   final List<LatLng> routePolyline;
   final LatLng? destination;
+  /// Sigue mi posición GPS — activado por el botón flecha.
   final bool autoFollow;
+  /// Encuadra a todos los riders en cada update — activado por el botón grupo.
+  final bool groupFollow;
   final LatLng? myPosition;
   final double? currentSpeed; // km/h
   final double distanceTraveled; // km acumulados
@@ -49,6 +53,7 @@ class MapState {
     this.routePolyline = const [],
     this.destination,
     this.autoFollow = true,
+    this.groupFollow = false,
     this.myPosition,
     this.currentSpeed,
     this.distanceTraveled = 0.0,
@@ -60,6 +65,7 @@ class MapState {
     LatLng? destination,
     bool clearDestination = false,
     bool? autoFollow,
+    bool? groupFollow,
     LatLng? myPosition,
     double? currentSpeed,
     bool clearSpeed = false,
@@ -71,6 +77,7 @@ class MapState {
         destination:
             clearDestination ? null : (destination ?? this.destination),
         autoFollow: autoFollow ?? this.autoFollow,
+        groupFollow: groupFollow ?? this.groupFollow,
         myPosition: myPosition ?? this.myPosition,
         currentSpeed:
             clearSpeed ? null : (currentSpeed ?? this.currentSpeed),
@@ -104,6 +111,15 @@ class MapNotifier extends StateNotifier<MapState> {
 
   void _syncPositions(Map<String, RiderPosition> raw) {
     final updated = Map<String, MapRiderPosition>.from(state.riders);
+    // Eager name lookup from sala state to avoid showing raw rider IDs
+    final salaRiders = _ref.read(salaProvider(_salaId)).riders;
+    final nameMap = {
+      for (final r in salaRiders)
+        if (r.riderId != null) r.riderId!: r.initials,
+    };
+    debugPrint('[MAP] _myRiderId=$_myRiderId');
+    debugPrint('[MAP] positionKeys=${raw.keys.toList()}');
+    debugPrint('[MAP] nameMap=$nameMap');
 
     for (final e in raw.entries) {
       final riderId = e.key;
@@ -114,7 +130,8 @@ class MapNotifier extends StateNotifier<MapState> {
 
       updated[riderId] = MapRiderPosition(
         riderId: riderId,
-        initials: prev?.initials ??
+        initials: nameMap[riderId] ??
+            prev?.initials ??
             riderId.substring(0, min(2, riderId.length)).toUpperCase(),
         position: newPos,
         previousPosition: prev?.position,
@@ -226,11 +243,19 @@ class MapNotifier extends StateNotifier<MapState> {
 
   void clearDestination() => state = state.copyWith(clearDestination: true);
 
-  void toggleAutoFollow() =>
-      state = state.copyWith(autoFollow: !state.autoFollow);
+  /// Activa "seguirme" — desactiva groupFollow.
+  void enableAutoFollow() =>
+      state = state.copyWith(autoFollow: true, groupFollow: false);
 
+  /// Activa "encuadrar grupo" — desactiva autoFollow.
+  void enableGroupFollow() =>
+      state = state.copyWith(groupFollow: true, autoFollow: false);
+
+  /// Desactiva ambos modos (usuario arrastró el mapa manualmente).
   void disableAutoFollow() {
-    if (state.autoFollow) state = state.copyWith(autoFollow: false);
+    if (state.autoFollow || state.groupFollow) {
+      state = state.copyWith(autoFollow: false, groupFollow: false);
+    }
   }
 }
 
@@ -239,7 +264,7 @@ class MapNotifier extends StateNotifier<MapState> {
 final mapProvider =
     StateNotifierProvider.family<MapNotifier, MapState, String>(
   (ref, salaId) {
-    final myRiderId = ref.watch(authProvider).user?.id ?? '';
+    final myRiderId = ref.watch(authProvider).user?.riderId ?? '';
     return MapNotifier(salaId, myRiderId, ref);
   },
 );

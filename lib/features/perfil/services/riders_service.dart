@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:noray4/core/network/api_client.dart';
 import 'package:noray4/core/network/api_endpoints.dart';
 
@@ -65,8 +66,31 @@ class RiderStats {
       );
 }
 
+class AvatarPreset {
+  final String id;
+  final String label;
+  final String url;
+
+  const AvatarPreset({required this.id, required this.label, required this.url});
+
+  factory AvatarPreset.fromJson(Map<String, dynamic> json) => AvatarPreset(
+        id: json['id'] as String,
+        label: json['label'] as String,
+        url: json['url'] as String,
+      );
+}
+
 class RidersService {
   final _dio = ApiClient.instance.dio;
+
+  /// Lista los avatares preset curados por el equipo Noray4.
+  Future<List<AvatarPreset>> getAvatarPresets() async {
+    final res = await _dio.get(ApiEndpoints.riderAvatarPresets);
+    final list = (res.data as Map<String, dynamic>)['presets'] as List;
+    return list
+        .map((e) => AvatarPreset.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
 
   /// Obtiene el perfil completo del rider autenticado.
   Future<RiderOut> getMyRider() async {
@@ -87,6 +111,20 @@ class RidersService {
       'bio': ?bio,
       'avatar_url': ?avatarUrl,
     });
+    return RiderOut.fromJson(res.data as Map<String, dynamic>);
+  }
+
+  /// Establece avatar desde URL (presets de comunidad).
+  Future<RiderOut> setAvatarUrl(String url) async {
+    return updateRider(avatarUrl: url);
+  }
+
+  /// Sube imagen a Cloudinary vía backend y actualiza el avatar.
+  Future<RiderOut> uploadAvatarFile(String filePath) async {
+    final formData = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath),
+    });
+    final res = await _dio.post(ApiEndpoints.riderAvatar, data: formData);
     return RiderOut.fromJson(res.data as Map<String, dynamic>);
   }
 

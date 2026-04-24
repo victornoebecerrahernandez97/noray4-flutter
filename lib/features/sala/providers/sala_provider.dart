@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:noray4/core/auth/auth_provider.dart';
+import 'package:noray4/features/amarres/models/amarres_models.dart';
 import 'package:noray4/features/sala/models/sala_models.dart';
 import 'package:noray4/features/sala/models/ws_events.dart';
 import 'package:noray4/features/sala/services/audio_service.dart';
@@ -66,22 +67,33 @@ class SalaNotifier extends StateNotifier<SalaState> {
           .toList();
 
       final messages = paginado.items
-          .where((m) => !m.deleted && m.content != null)
+          .where((m) => !m.deleted)
           .map((m) => SalaMessage.fromApi({
                 '_id': m.id,
                 'rider_id': m.riderId,
                 'display_name': m.displayName,
                 'content': m.content,
                 'created_at': m.createdAt,
+                'type': m.type,
                 'media_url': m.mediaUrl,
+                'media_thumb_url': m.mediaThumbUrl,
+                'edited': m.edited,
+                'deleted': m.deleted,
               }, _myRiderId))
           .toList();
 
+      // Todos los miembros empiezan como online (se ajusta por presencia WS)
+      final onlineRiderIds =
+          sala.miembros.map((m) => m.riderId).toSet();
+
       state = state.copyWith(
         nombre: sala.name,
+        ownerId: sala.ownerId,
         riders: riders,
         messages: messages,
+        fotos: sala.fotos,
         tiempo: _calcTiempo(sala.createdAt),
+        onlineRiderIds: onlineRiderIds,
         isLoading: false,
       );
     } catch (e) {
@@ -128,7 +140,11 @@ class SalaNotifier extends StateNotifier<SalaState> {
             'display_name': msg.displayName,
             'content': msg.content,
             'created_at': msg.createdAt,
+            'type': msg.type,
             'media_url': msg.mediaUrl,
+            'media_thumb_url': msg.mediaThumbUrl,
+            'edited': msg.edited,
+            'deleted': msg.deleted,
           }, _myRiderId);
           state = state.copyWith(
               messages: [...state.messages, newMessage]);
@@ -148,7 +164,13 @@ class SalaNotifier extends StateNotifier<SalaState> {
         }
 
       case PresenciaEvent():
-        break;
+        final updated = Set<String>.from(state.onlineRiderIds);
+        if (event.status == 'online') {
+          updated.add(event.riderId);
+        } else {
+          updated.remove(event.riderId);
+        }
+        state = state.copyWith(onlineRiderIds: updated);
 
       case AudioEvent():
         if (event.riderId != _myRiderId && event.data.isNotEmpty) {
@@ -203,21 +225,86 @@ class SalaNotifier extends StateNotifier<SalaState> {
   void switchTab(SalaTab tab) => state = state.copyWith(activeTab: tab);
 
   Future<void> sendMessage(String text) async {
-    if (text.trim().isEmpty) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || trimmed.length > 4000) return;
     final optimistic = SalaMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       sender: 'Tú',
       riderId: _myRiderId,
-      text: text.trim(),
+      text: trimmed,
       time: _formatTime(DateTime.now()),
       isOutgoing: true,
     );
     state = state.copyWith(messages: [...state.messages, optimistic]);
     try {
-      await _chatService.sendText(_salaId, text.trim());
+      await _chatService.sendText(_salaId, trimmed);
     } catch (_) {
-      // Mantener mensaje optimista sin rollback
+      // Mensaje optimista permanece visible
     }
+  }
+
+  Future<void> sendImage(String filePath) async {
+    try {
+      final media = await _chatService.uploadMedia(_salaId, filePath);
+      final mediaUrl = media['media_url']!;
+      final thumbUrl = media['thumb_url']!;
+      final optimistic = SalaMessage(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        sender: 'Tú',
+        riderId: _myRiderId,
+        text: '',
+        time: _formatTime(DateTime.now()),
+        isOutgoing: true,
+        type: 'image',
+        mediaUrl: mediaUrl,
+        mediaThumbUrl: thumbUrl,
+      );
+      state = state.copyWith(messages: [...state.messages, optimistic]);
+      await _chatService.sendImageMessage(_salaId, mediaUrl, thumbUrl);
+    } catch (_) {}
+  }
+
+  Future<void> deleteMessage(String msgId) async {
+    // Soft-delete local inmediato
+    final updated = state.messages
+        .where((m) => m.id != msgId)
+        .toList();
+    state = state.copyWith(messages: updated);
+    try {
+      await _chatService.deleteMensaje(_salaId, msgId);
+    } catch (_) {}
+  }
+
+  Future<void> editMessage(String msgId, String newContent) async {
+    final trimmed = newContent.trim();
+    if (trimmed.isEmpty || trimmed.length > 4000) return;
+    final updated = state.messages.map((m) {
+      if (m.id == msgId) return m.copyWith(text: trimmed, edited: true);
+      return m;
+    }).toList();
+    state = state.copyWith(messages: updated);
+    try {
+      await _chatService.editMensaje(_salaId, msgId, trimmed);
+    } catch (_) {}
+  }
+
+  Future<void> uploadSalaFoto(String filePath) async {
+    try {
+      final sala = await _salasService.uploadSalaFoto(_salaId, filePath);
+      state = state.copyWith(fotos: sala.fotos);
+    } catch (_) {}
+  }
+
+  /// Cierra la sala en backend y retorna el Amarre creado.
+  Future<Amarre?> closeSalaAndGetAmarre() async {
+    try {
+      final data = await _salasService.closeSala(_salaId);
+      final amarreJson = data['amarre'] as Map<String, dynamic>?;
+      if (amarreJson != null) {
+        return Amarre.fromJson(amarreJson);
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> startPtt() => _voice.startPtt();
@@ -263,7 +350,7 @@ class SalaNotifier extends StateNotifier<SalaState> {
 final salaProvider =
     StateNotifierProvider.family<SalaNotifier, SalaState, String>(
   (ref, salaId) {
-    final myRiderId = ref.watch(authProvider).user?.id ?? '';
+    final myRiderId = ref.watch(authProvider).user?.riderId ?? '';
     return SalaNotifier(salaId, myRiderId);
   },
 );

@@ -434,28 +434,30 @@ class _BotonCrearState extends State<_BotonCrear> {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 20),
           decoration: BoxDecoration(
-            color: Noray4Colors.darkPrimary,
+            color: Noray4Colors.darkAccent,
             borderRadius: Noray4Radius.primary,
           ),
           child: widget.isLoading
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    color: Color(0xFF111110),
+              ? const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Color(0xFF0C1C20),
+                    ),
                   ),
                 )
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Icon(
-                        Symbols.anchor, size: 20, color: Color(0xFF111110)),
+                        Symbols.anchor, size: 20, color: Color(0xFF0C1C20)),
                     const SizedBox(width: Noray4Spacing.s2),
                     Text(
                       'Convocar salida',
                       style: Noray4TextStyles.body.copyWith(
-                        color: const Color(0xFF111110),
+                        color: const Color(0xFF0C1C20),
                         fontWeight: FontWeight.w700,
                         fontSize: 16,
                       ),

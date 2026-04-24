@@ -15,6 +15,9 @@ class GoogleAuthService {
   /// Inicia el flujo OAuth de Google. Retorna {idToken, email, displayName}
   /// o null si el usuario cancela.
   Future<Map<String, String>?> signIn() async {
+    // signOut fuerza el account picker en cada intento; sin esto Android
+    // reutiliza la cuenta en caché y nunca muestra el selector.
+    await _googleSignIn.signOut();
     final account = await _googleSignIn.signIn();
     debugPrint('GOOGLE account: ${account?.email}');
     if (account == null) return null;

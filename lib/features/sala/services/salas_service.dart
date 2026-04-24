@@ -1,5 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:noray4/core/network/api_client.dart';
 import 'package:noray4/core/network/api_endpoints.dart';
+import 'package:noray4/features/sala/models/sala_models.dart';
 
 class MiembroOut {
   final String riderId;
@@ -30,6 +32,7 @@ class SalaOut {
   final String status; // active | closed
   final bool isPrivate;
   final List<MiembroOut> miembros;
+  final List<SalaFoto> fotos;
   final String? qrToken;
   final String? inviteLink;
   final String createdAt;
@@ -43,6 +46,7 @@ class SalaOut {
     required this.status,
     required this.isPrivate,
     this.miembros = const [],
+    this.fotos = const [],
     this.qrToken,
     this.inviteLink,
     required this.createdAt,
@@ -60,6 +64,10 @@ class SalaOut {
                 ?.map((e) => MiembroOut.fromJson(e as Map<String, dynamic>))
                 .toList() ??
             [],
+        fotos: (json['fotos'] as List?)
+                ?.map((e) => SalaFoto.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
         qrToken: json['qr_token'] as String?,
         inviteLink: json['invite_link'] as String?,
         createdAt: json['created_at'] as String,
@@ -72,7 +80,6 @@ class SalaOut {
 class SalasService {
   final _dio = ApiClient.instance.dio;
 
-  /// Lista salas activas paginadas.
   Future<List<SalaOut>> listSalas({int skip = 0, int limit = 20}) async {
     final res = await _dio.get(
       ApiEndpoints.salas,
@@ -83,7 +90,6 @@ class SalasService {
         .toList();
   }
 
-  /// Crea una sala. El rider autenticado queda como admin.
   Future<SalaOut> createSala({
     required String name,
     String? description,
@@ -97,13 +103,11 @@ class SalasService {
     return SalaOut.fromJson(res.data as Map<String, dynamic>);
   }
 
-  /// Detalle completo de una sala.
   Future<SalaOut> getSala(String salaId) async {
     final res = await _dio.get(ApiEndpoints.sala(salaId));
     return SalaOut.fromJson(res.data as Map<String, dynamic>);
   }
 
-  /// Actualiza nombre, descripción o privacidad. Solo el admin puede.
   Future<SalaOut> updateSala(
     String salaId, {
     String? name,
@@ -118,7 +122,6 @@ class SalasService {
     return SalaOut.fromJson(res.data as Map<String, dynamic>);
   }
 
-  /// Unirse a una sala. Para privadas requiere [qrToken].
   Future<SalaOut> joinSala(String salaId, {String? qrToken}) async {
     final res = await _dio.post(
       ApiEndpoints.salaJoin(salaId),
@@ -128,12 +131,12 @@ class SalasService {
   }
 
   /// Cierra la sala. Solo el admin puede.
-  Future<SalaOut> closeSala(String salaId) async {
+  /// Retorna {sala: SalaOut, amarre: Map} del servidor.
+  Future<Map<String, dynamic>> closeSala(String salaId) async {
     final res = await _dio.post(ApiEndpoints.salaClose(salaId));
-    return SalaOut.fromJson(res.data as Map<String, dynamic>);
+    return res.data as Map<String, dynamic>;
   }
 
-  /// Retorna el token QR e invite_link de la sala.
   Future<Map<String, String>> getSalaQr(String salaId) async {
     final res = await _dio.get(ApiEndpoints.salaQr(salaId));
     return {
@@ -142,11 +145,27 @@ class SalasService {
     };
   }
 
-  /// Lista los miembros de la sala.
   Future<List<MiembroOut>> getMiembros(String salaId) async {
     final res = await _dio.get(ApiEndpoints.salaMiembros(salaId));
     return (res.data as List)
         .map((e) => MiembroOut.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Sube una foto a la sala (evidencia). Retorna la sala actualizada con fotos.
+  Future<SalaOut> uploadSalaFoto(
+    String salaId,
+    String filePath, {
+    String? caption,
+  }) async {
+    final formData = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath),
+      if (caption != null && caption.isNotEmpty) 'caption': caption,
+    });
+    final res = await _dio.post(
+      ApiEndpoints.salaFotos(salaId),
+      data: formData,
+    );
+    return SalaOut.fromJson(res.data as Map<String, dynamic>);
   }
 }

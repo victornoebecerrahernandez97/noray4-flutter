@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +16,7 @@ class PerfilScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final perfil = ref.watch(perfilProvider);
+    final avatarUrl = ref.watch(authProvider).user?.avatarUrl;
 
     return Scaffold(
       backgroundColor: Noray4Colors.darkBackground,
@@ -34,6 +36,7 @@ class PerfilScreen extends ConsumerWidget {
                 _ProfileHeader(
                   nombre: perfil.nombre,
                   ubicacion: perfil.ubicacion,
+                  avatarUrl: avatarUrl,
                 ),
                 const SizedBox(height: Noray4Spacing.s8 + 4),
                 // Stats bento grid
@@ -116,7 +119,12 @@ class _PerfilAppBar extends StatelessWidget {
 class _ProfileHeader extends StatelessWidget {
   final String nombre;
   final String ubicacion;
-  const _ProfileHeader({required this.nombre, required this.ubicacion});
+  final String? avatarUrl;
+  const _ProfileHeader({
+    required this.nombre,
+    required this.ubicacion,
+    this.avatarUrl,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -135,14 +143,38 @@ class _ProfileHeader extends StatelessWidget {
               width: 0.5,
             ),
           ),
-          child: const Center(
-            child: Icon(
-              Symbols.person,
-              fill: 1,
-              size: 48,
-              color: Color(0xFF474747),
-            ),
-          ),
+          clipBehavior: Clip.antiAlias,
+          child: (avatarUrl != null && avatarUrl!.isNotEmpty)
+              ? CachedNetworkImage(
+                  imageUrl: avatarUrl!,
+                  fit: BoxFit.cover,
+                  placeholder: (ctx, url) => const Center(
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: Noray4Colors.darkOutline,
+                      ),
+                    ),
+                  ),
+                  errorWidget: (ctx, url, err) => const Center(
+                    child: Icon(
+                      Symbols.person,
+                      fill: 1,
+                      size: 48,
+                      color: Color(0xFF474747),
+                    ),
+                  ),
+                )
+              : const Center(
+                  child: Icon(
+                    Symbols.person,
+                    fill: 1,
+                    size: 48,
+                    color: Color(0xFF474747),
+                  ),
+                ),
         ),
         const SizedBox(height: Noray4Spacing.s6),
         Text(

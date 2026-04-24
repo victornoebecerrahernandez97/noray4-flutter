@@ -9,6 +9,8 @@ abstract final class ApiEndpoints {
   // ── Riders ───────────────────────────────────────────────────────────────
   static const riderMe = '/api/v1/riders/me';
   static const riderMoto = '/api/v1/riders/me/moto';
+  static const riderAvatar = '/api/v1/riders/me/avatar';
+  static const riderAvatarPresets = '/api/v1/riders/avatar-presets';
   static String rider(String id) => '/api/v1/riders/$id';
   static String riderStats(String id) => '/api/v1/riders/$id/stats';
   static String riderFollow(String id) => '/api/v1/riders/$id/follow';
@@ -20,6 +22,7 @@ abstract final class ApiEndpoints {
   static String salaClose(String id) => '/api/v1/salas/$id/close';
   static String salaQr(String id) => '/api/v1/salas/$id/qr';
   static String salaMiembros(String id) => '/api/v1/salas/$id/miembros';
+  static String salaFotos(String id) => '/api/v1/salas/$id/fotos';
 
   // ── Chat ─────────────────────────────────────────────────────────────────
   static String chatMensajes(String salaId) =>

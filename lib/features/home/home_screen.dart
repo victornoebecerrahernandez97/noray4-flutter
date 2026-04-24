@@ -1,9 +1,11 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:noray4/core/auth/auth_provider.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
+import 'package:noray4/shared/widgets/rider_avatar.dart';
 import 'package:noray4/features/home/models/home_models.dart';
 import 'package:noray4/features/home/providers/home_provider.dart';
 import 'package:noray4/features/home/widgets/noray_activo_card.dart';
@@ -58,8 +60,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ? null
           : FloatingActionButton.extended(
               onPressed: () => context.push('/salida/nueva'),
-              backgroundColor: Noray4Colors.darkPrimary,
-              foregroundColor: Noray4Colors.darkBackground,
+              backgroundColor: Noray4Colors.darkAccent,
+              foregroundColor: Color(0xFF0C1C20),
               elevation: 0,
               shape: RoundedRectangleBorder(
                   borderRadius: Noray4Radius.primary),
@@ -125,16 +127,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ],
                       ),
                       const SizedBox(height: Noray4Spacing.s6),
-                      ...rutas.map((r) => Padding(
-                            padding: const EdgeInsets.only(
-                                bottom: Noray4Spacing.s8),
-                            child: RutaCard(
-                              ruta: r,
-                              onToggleFavorita: () => ref
-                                  .read(homeProvider.notifier)
-                                  .toggleFavorita(r.id),
-                            ),
-                          )),
+                      if (rutas.isEmpty && !_searchActive)
+                        const _RutasEmptyState()
+                      else
+                        ...rutas.map((r) => Padding(
+                              padding: const EdgeInsets.only(
+                                  bottom: Noray4Spacing.s8),
+                              child: RutaCard(
+                                ruta: r,
+                                onToggleFavorita: () => ref
+                                    .read(homeProvider.notifier)
+                                    .toggleFavorita(r.id),
+                              ),
+                            )),
                     ],
                   ),
           ),
@@ -186,8 +191,44 @@ class _HomeAppBar extends StatelessWidget {
                 children: [
                   GestureDetector(
                     onTap: onMenuTap,
-                    child: const Icon(Symbols.menu,
-                        size: 24, color: Noray4Colors.darkPrimary),
+                    child: Consumer(builder: (ctx, ref, _) {
+                      final user = ref.watch(authProvider).user;
+                      final avatarUrl = user?.avatarUrl;
+                      final nombre = user?.nombre ?? 'R';
+                      final initials = nombre.trim().isNotEmpty
+                          ? nombre.trim()[0].toUpperCase()
+                          : 'R';
+                      return (avatarUrl != null && avatarUrl.isNotEmpty)
+                          ? Container(
+                              width: 32,
+                              height: 32,
+                              clipBehavior: Clip.antiAlias,
+                              decoration: BoxDecoration(
+                                color: Noray4Colors.darkSurfaceContainerHighest,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Noray4Colors.darkOutlineVariant
+                                      .withValues(alpha: 0.3),
+                                  width: 0.5,
+                                ),
+                              ),
+                              child: CachedNetworkImage(
+                                imageUrl: avatarUrl,
+                                fit: BoxFit.cover,
+                                errorWidget: (_, _, _) => Center(
+                                  child: Text(
+                                    initials,
+                                    style: Noray4TextStyles.bodySmall.copyWith(
+                                      color: Noray4Colors.darkSecondary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : const Icon(Symbols.menu,
+                              size: 24, color: Noray4Colors.darkPrimary);
+                    }),
                   ),
                   const SizedBox(width: Noray4Spacing.s4),
                   Text(
@@ -284,6 +325,7 @@ class _HomeDrawer extends ConsumerWidget {
     final user = ref.watch(authProvider).user;
     final nombre = user?.nombre ?? 'Rider';
     final ciudad = user?.ciudad ?? '';
+    final avatarUrl = user?.avatarUrl;
 
     String initials(String n) {
       final parts = n.trim().split(' ');
@@ -314,16 +356,42 @@ class _HomeDrawer extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Noray4Colors.darkSurfaceContainerHighest,
-                    child: Text(
-                      initials(nombre),
-                      style: Noray4TextStyles.headlineM.copyWith(
-                        color: Noray4Colors.darkSecondary,
-                        fontSize: 18,
+                  Container(
+                    width: 56,
+                    height: 56,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: Noray4Colors.darkSurfaceContainerHighest,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Noray4Colors.darkOutlineVariant
+                            .withValues(alpha: 0.3),
+                        width: 0.5,
                       ),
                     ),
+                    child: (avatarUrl != null && avatarUrl.isNotEmpty)
+                        ? CachedNetworkImage(
+                            imageUrl: avatarUrl,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => Center(
+                              child: Text(
+                                initials(nombre),
+                                style: Noray4TextStyles.headlineM.copyWith(
+                                  color: Noray4Colors.darkSecondary,
+                                  fontSize: 18,
+                                ),
+                              ),
+                            ),
+                          )
+                        : Center(
+                            child: Text(
+                              initials(nombre),
+                              style: Noray4TextStyles.headlineM.copyWith(
+                                color: Noray4Colors.darkSecondary,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
                   ),
                   const SizedBox(width: Noray4Spacing.s4),
                   Expanded(
@@ -485,6 +553,56 @@ class _SearchEmpty extends StatelessWidget {
             'Sin resultados para tu búsqueda',
             style: Noray4TextStyles.body.copyWith(
               color: Noray4Colors.darkOnSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Rutas Empty State ────────────────────────────────────────────────────────
+
+class _RutasEmptyState extends StatelessWidget {
+  const _RutasEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Noray4Spacing.s8),
+      child: Column(
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: Noray4Colors.darkSurfaceContainerLow,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Noray4Colors.darkOutlineVariant.withValues(alpha: 0.4),
+                width: 0.5,
+              ),
+            ),
+            child: const Icon(
+              Symbols.route,
+              size: 28,
+              color: Noray4Colors.darkOutline,
+            ),
+          ),
+          const SizedBox(height: Noray4Spacing.s4),
+          Text(
+            'No hay salidas aún',
+            style: Noray4TextStyles.headlineM.copyWith(
+              color: Noray4Colors.darkPrimary,
+            ),
+          ),
+          const SizedBox(height: Noray4Spacing.s2),
+          Text(
+            'Sé el primero en convocar una salida\ny llevar a tu tripulación a rodar.',
+            style: Noray4TextStyles.body.copyWith(
+              color: Noray4Colors.darkOnSurfaceVariant,
+              height: 1.6,
             ),
             textAlign: TextAlign.center,
           ),

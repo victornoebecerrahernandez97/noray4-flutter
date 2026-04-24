@@ -1,15 +1,29 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:noray4/core/auth/auth_models.dart';
 import 'package:noray4/core/auth/auth_repository.dart';
+import 'package:noray4/features/perfil/services/riders_service.dart';
 
 const _keyOnboarding = 'onboarding_done';
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final _repo = AuthRepository();
+  final _riders = RidersService();
 
   AuthNotifier() : super(const AuthState());
+
+  Future<({String id, String? avatarUrl})> _fetchRiderInfo() async {
+    try {
+      final rider = await _riders.getMyRider();
+      debugPrint('[AUTH] riderId fetched: ${rider.id}');
+      return (id: rider.id, avatarUrl: rider.avatarUrl);
+    } catch (e) {
+      debugPrint('[AUTH] _fetchRiderInfo ERROR: $e');
+      return (id: '', avatarUrl: null);
+    }
+  }
 
   // ── Arranque ──────────────────────────────────────────────────────────────
 
@@ -23,11 +37,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
     try {
       final user = await _repo.getMe();
+      final info = await _fetchRiderInfo();
       state = AuthState(
         user: CurrentUser(
           id: user.id,
+          riderId: info.id,
           email: user.email,
           nombre: user.displayName,
+          avatarUrl: info.avatarUrl,
           isGuest: user.isGuest,
         ),
         onboardingDone: true,
@@ -47,14 +64,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final user = await _repo.register(email, password, displayName);
+      final info = await _fetchRiderInfo();
       await _setOnboardingDone();
       state = AuthState(
         user: CurrentUser(
           id: user.id,
+          riderId: info.id,
           email: user.email,
           nombre: user.displayName,
+          avatarUrl: info.avatarUrl,
         ),
         onboardingDone: true,
+        pendingAvatarSetup: true,
         isLoading: false,
       );
     } catch (e) {
@@ -66,12 +87,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final user = await _repo.login(email, password);
+      final info = await _fetchRiderInfo();
       await _setOnboardingDone();
       state = AuthState(
         user: CurrentUser(
           id: user.id,
+          riderId: info.id,
           email: user.email,
           nombre: user.displayName,
+          avatarUrl: info.avatarUrl,
         ),
         onboardingDone: true,
         isLoading: false,
@@ -86,14 +110,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final user = await _repo.loginWithGoogle(idToken, email, displayName);
+      final info = await _fetchRiderInfo();
       await _setOnboardingDone();
       state = AuthState(
         user: CurrentUser(
           id: user.id,
+          riderId: info.id,
           email: user.email,
           nombre: user.displayName,
+          avatarUrl: info.avatarUrl,
         ),
         onboardingDone: true,
+        pendingAvatarSetup: info.avatarUrl == null || info.avatarUrl!.isEmpty,
         isLoading: false,
       );
     } catch (e) {
@@ -105,12 +133,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final user = await _repo.guestToken();
+      final info = await _fetchRiderInfo();
       await _setOnboardingDone();
       state = AuthState(
         user: CurrentUser(
           id: user.id,
+          riderId: info.id,
           email: user.email,
           nombre: user.displayName,
+          avatarUrl: info.avatarUrl,
           isGuest: true,
         ),
         onboardingDone: true,
@@ -152,6 +183,39 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(
       user: state.user?.copyWith(nombre: nombre, ciudad: ciudad, bio: bio),
     );
+  }
+
+  /// Guarda avatar preset (URL de comunidad) en backend + estado.
+  Future<void> setAvatarPreset(String url) async {
+    try {
+      final rider = await _riders.setAvatarUrl(url);
+      state = state.copyWith(
+        user: state.user?.copyWith(avatarUrl: rider.avatarUrl ?? url),
+        pendingAvatarSetup: false,
+      );
+    } catch (e) {
+      debugPrint('[AUTH] setAvatarPreset ERROR: $e');
+      rethrow;
+    }
+  }
+
+  /// Sube imagen desde galería/cámara y sincroniza el avatar.
+  Future<void> uploadAvatarFile(String filePath) async {
+    try {
+      final rider = await _riders.uploadAvatarFile(filePath);
+      state = state.copyWith(
+        user: state.user?.copyWith(avatarUrl: rider.avatarUrl),
+        pendingAvatarSetup: false,
+      );
+    } catch (e) {
+      debugPrint('[AUTH] uploadAvatarFile ERROR: $e');
+      rethrow;
+    }
+  }
+
+  /// Cierra el paso de avatar sin elegir (Omitir).
+  void finishAvatarSetup() {
+    state = state.copyWith(pendingAvatarSetup: false);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

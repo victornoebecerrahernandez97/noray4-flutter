@@ -7,6 +7,7 @@ import 'package:noray4/core/auth/auth_provider.dart';
 import 'package:noray4/core/auth/google_auth_service.dart';
 import 'package:noray4/core/services/haptics.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
+import 'package:noray4/features/onboarding/widgets/avatar_step.dart';
 
 // ─── Datos de los 3 pasos ────────────────────────────────────────────────────
 
@@ -21,17 +22,17 @@ const _steps = [
   _Step(
     'Convoca a la flota...',
     'Crea salidas, comparte tu ruta en tiempo real y rueda siempre conectado con tu gente.',
-    'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800',
+    'assets/images/onboarding/step-1.jpg',
   ),
   _Step(
     'Rodando en el mismo canal...',
     'Mapa en vivo, voz PTT y chat para que nadie se pierda en la ruta.',
-    'https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?w=800',
+    'assets/images/onboarding/step-2.jpg',
   ),
   _Step(
     '¡A ver las fotos!',
     'Cada salida queda guardada. Tus kilómetros, tu ruta, tu tripulación y un álbum listo para descargar.',
-    'https://images.unsplash.com/photo-1449426468159-d96dbf08f19f?w=800',
+    'assets/images/onboarding/step-3.jpg',
   ),
 ];
 
@@ -44,11 +45,14 @@ class OnboardingScreen extends ConsumerStatefulWidget {
   ConsumerState<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
+enum _Phase { intro, methodPick, emailForm, avatar }
+
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     with TickerProviderStateMixin {
   int _page = 0;
-  bool _showNameInput = false;
+  _Phase _phase = _Phase.intro;
   bool _isGuestLoading = false;
+  bool _isGoogleLoading = false;
 
   // Fondo animado — ciclo de 6 s entre 3 tonos oscuros
   late final AnimationController _bgCtrl;
@@ -121,11 +125,53 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
   void _next() {
     N4Haptics.selection();
     if (_page < _steps.length - 1) {
+      // Cambio de paso dentro del intro — no reseteamos la animación global,
+      // el AnimatedSwitcher interno anima solo el hero y los dots morphean.
       setState(() => _page++);
     } else {
-      setState(() => _showNameInput = true);
+      setState(() => _phase = _Phase.methodPick);
+      _stepCtrl.forward(from: 0);
     }
+  }
+
+  void _prev() {
+    if (_page == 0) return;
+    N4Haptics.selection();
+    setState(() => _page--);
+  }
+
+  void _goTo(_Phase p) {
+    N4Haptics.selection();
+    setState(() => _phase = p);
     _stepCtrl.forward(from: 0);
+  }
+
+  Future<void> _loginWithGoogle() async {
+    if (_isGoogleLoading) return;
+    N4Haptics.light();
+    setState(() => _isGoogleLoading = true);
+    try {
+      final result = await GoogleAuthService().signIn();
+      if (result == null) {
+        setState(() => _isGoogleLoading = false);
+        return;
+      }
+      await ref.read(authProvider.notifier).loginWithGoogle(
+            result['idToken']!,
+            result['email']!,
+            result['displayName']!,
+          );
+      if (!mounted) return;
+      final auth = ref.read(authProvider);
+      if (auth.isAuthenticated) {
+        setState(() => _phase = _Phase.avatar);
+        _stepCtrl.forward(from: 0);
+      }
+    } catch (_) {
+      // error en authProvider
+    } finally {
+      if (mounted) setState(() => _isGoogleLoading = false);
+    }
   }
 
   Future<void> _enterAsGuest() async {
@@ -160,19 +206,41 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
             opacity: _fadeAnim,
             child: SlideTransition(
               position: _slideAnim,
-              child: _showNameInput
-                  ? _AccountSetupView(
-                      onGuest: _enterAsGuest,
-                      isGuestLoading: _isGuestLoading,
-                    )
-                  : _StepView(
-                      step: _steps[_page],
-                      page: _page,
-                      total: _steps.length,
-                      onNext: _next,
-                      onGuest: _enterAsGuest,
-                      isGuestLoading: _isGuestLoading,
-                    ),
+              child: switch (_phase) {
+                _Phase.avatar => AvatarStep(
+                    onDone: () {
+                      if (!mounted) return;
+                      ref.read(authProvider.notifier).finishAvatarSetup();
+                      context.go('/home');
+                    },
+                  ),
+                _Phase.emailForm => _AccountSetupView(
+                    onGuest: _enterAsGuest,
+                    isGuestLoading: _isGuestLoading,
+                    onBack: () => _goTo(_Phase.methodPick),
+                    onNeedAvatar: () {
+                      if (!mounted) return;
+                      setState(() => _phase = _Phase.avatar);
+                      _stepCtrl.forward(from: 0);
+                    },
+                  ),
+                _Phase.methodPick => _MethodPickView(
+                    onGoogle: _loginWithGoogle,
+                    onEmail: () => _goTo(_Phase.emailForm),
+                    onGuest: _enterAsGuest,
+                    isGoogleLoading: _isGoogleLoading,
+                    isGuestLoading: _isGuestLoading,
+                  ),
+                _Phase.intro => _StepView(
+                    step: _steps[_page],
+                    page: _page,
+                    total: _steps.length,
+                    onNext: _next,
+                    onPrev: _prev,
+                    onGuest: _enterAsGuest,
+                    isGuestLoading: _isGuestLoading,
+                  ),
+              },
             ),
           ),
         ),
@@ -188,6 +256,7 @@ class _StepView extends StatelessWidget {
   final int page;
   final int total;
   final VoidCallback onNext;
+  final VoidCallback onPrev;
   final VoidCallback onGuest;
   final bool isGuestLoading;
 
@@ -196,13 +265,24 @@ class _StepView extends StatelessWidget {
     required this.page,
     required this.total,
     required this.onNext,
+    required this.onPrev,
     required this.onGuest,
     required this.isGuestLoading,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragEnd: (details) {
+        final v = details.primaryVelocity ?? 0;
+        if (v < -250) {
+          onNext();
+        } else if (v > 250) {
+          onPrev();
+        }
+      },
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
@@ -216,7 +296,30 @@ class _StepView extends StatelessWidget {
         ),
         const SizedBox(height: Noray4Spacing.s4),
         Expanded(
-          child: _HeroImage(imageUrl: step.imageUrl, step: step),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 520),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, anim) {
+              final slide = Tween<Offset>(
+                begin: const Offset(0.10, 0),
+                end: Offset.zero,
+              ).animate(anim);
+              return FadeTransition(
+                opacity: anim,
+                child: SlideTransition(position: slide, child: child),
+              );
+            },
+            layoutBuilder: (current, previous) => Stack(
+              alignment: Alignment.center,
+              children: [...previous, ?current],
+            ),
+            child: _HeroImage(
+              key: ValueKey(step.imageUrl),
+              imageUrl: step.imageUrl,
+              step: step,
+            ),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -231,7 +334,7 @@ class _StepView extends StatelessWidget {
               _StepDots(total: total, active: page),
               const SizedBox(height: Noray4Spacing.s6),
               _PrimaryButton(
-                label: page < total - 1 ? 'Siguiente' : 'Crear mi cuenta',
+                label: page < total - 1 ? 'Siguiente' : 'Empezar',
                 onTap: onNext,
               ),
               const SizedBox(height: Noray4Spacing.s2),
@@ -240,6 +343,7 @@ class _StepView extends StatelessWidget {
           ),
         ),
       ],
+      ),
     );
   }
 }
@@ -249,10 +353,14 @@ class _StepView extends StatelessWidget {
 class _AccountSetupView extends ConsumerStatefulWidget {
   final VoidCallback onGuest;
   final bool isGuestLoading;
+  final VoidCallback onBack;
+  final VoidCallback onNeedAvatar;
 
   const _AccountSetupView({
     required this.onGuest,
     required this.isGuestLoading,
+    required this.onBack,
+    required this.onNeedAvatar,
   });
 
   @override
@@ -264,7 +372,6 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  bool _isGoogleLoading = false;
 
   @override
   void dispose() {
@@ -272,31 +379,6 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
     _emailCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _loginWithGoogle() async {
-    if (_isGoogleLoading) return;
-    N4Haptics.light();
-    setState(() => _isGoogleLoading = true);
-    try {
-      final result = await GoogleAuthService().signIn();
-      if (result == null) {
-        setState(() => _isGoogleLoading = false);
-        return;
-      }
-      await ref.read(authProvider.notifier).loginWithGoogle(
-            result['idToken']!,
-            result['email']!,
-            result['displayName']!,
-          );
-      if (!mounted) return;
-      final auth = ref.read(authProvider);
-      if (auth.isAuthenticated) context.go('/home');
-    } catch (_) {
-      // error manejado por authProvider
-    } finally {
-      if (mounted) setState(() => _isGoogleLoading = false);
-    }
   }
 
   Future<void> _register() async {
@@ -309,7 +391,7 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
     );
     if (!mounted) return;
     final auth = ref.read(authProvider);
-    if (auth.isAuthenticated) context.go('/home');
+    if (auth.isAuthenticated) widget.onNeedAvatar();
   }
 
   void _showLoginSheet() {
@@ -356,7 +438,7 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _BrandHeader(),
+              _BrandHeader(onBack: widget.onBack),
               const SizedBox(height: Noray4Spacing.s8),
               Text(
                 '¿Cómo te conocen\ntus camaradas?',
@@ -415,26 +497,11 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
                     (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
               ),
               const SizedBox(height: Noray4Spacing.s8),
-              _GoogleButton(
-                onTap: _loginWithGoogle,
-                isLoading: _isGoogleLoading,
+              _PrimaryButton(
+                label: 'Crear cuenta',
+                onTap: _register,
+                isLoading: isRegistering,
               ),
-              const SizedBox(height: Noray4Spacing.s2),
-              isRegistering
-                  ? const Center(
-                      child: SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                    )
-                  : _PrimaryButton(
-                      label: 'Crear cuenta',
-                      onTap: _register,
-                    ),
               const SizedBox(height: Noray4Spacing.s2),
               Center(
                 child: TextButton(
@@ -450,10 +517,6 @@ class _AccountSetupViewState extends ConsumerState<_AccountSetupView> {
                     ),
                   ),
                 ),
-              ),
-              _GhostButton(
-                onTap: widget.onGuest,
-                isLoading: widget.isGuestLoading,
               ),
             ],
           ),
@@ -573,23 +636,11 @@ class _LoginSheetState extends ConsumerState<_LoginSheet> {
                     (v == null || v.isEmpty) ? 'Campo requerido' : null,
               ),
               const SizedBox(height: Noray4Spacing.s6),
-              isLoading
-                  ? const Center(
-                      child: SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                    )
-                  : _PrimaryButton(
-                      label: 'Entrar',
-                      onTap: () {
-                        _login();
-                      },
-                    ),
+              _PrimaryButton(
+                label: 'Entrar',
+                onTap: _login,
+                isLoading: isLoading,
+              ),
             ],
           ),
         ),
@@ -664,7 +715,8 @@ class _AuthField extends StatelessWidget {
 // ─── Brand Header ────────────────────────────────────────────────────────────
 
 class _BrandHeader extends StatelessWidget {
-  const _BrandHeader();
+  final VoidCallback? onBack;
+  const _BrandHeader({this.onBack});
 
   @override
   Widget build(BuildContext context) {
@@ -672,41 +724,223 @@ class _BrandHeader extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Noray⁴',
-              style: Noray4TextStyles.wordmark.copyWith(
-                fontSize: 28,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.05 * 28,
+        if (onBack != null)
+          GestureDetector(
+            onTap: onBack,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Noray4Colors.darkSurfaceContainerLow,
+                borderRadius: Noray4Radius.secondary,
+                border: Border.all(
+                  color: Noray4Colors.darkOutlineVariant,
+                  width: 0.5,
+                ),
+              ),
+              child: const Icon(
+                Symbols.arrow_back,
                 color: Colors.white,
+                size: 20,
               ),
             ),
+          ),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(left: onBack != null ? Noray4Spacing.s4 : 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Noray',
+                      style: Noray4TextStyles.wordmark.copyWith(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.05 * 28,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Text(
+                      '⁴',
+                      style: Noray4TextStyles.wordmark.copyWith(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: Noray4Colors.darkAccent,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  'CONECTA. RUEDA. VUELVE.',
+                  style: Noray4TextStyles.label.copyWith(
+                    color: Noray4Colors.darkOutline,
+                    letterSpacing: 0.08 * 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (onBack == null)
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Noray4Colors.darkAccent,
+              borderRadius: Noray4Radius.secondary,
+            ),
+            child: const Icon(
+              Symbols.explore,
+              color: Color(0xFF0C1C20),
+              size: 22,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ─── Method Pick View ────────────────────────────────────────────────────────
+
+class _MethodPickView extends StatelessWidget {
+  final Future<void> Function() onGoogle;
+  final VoidCallback onEmail;
+  final VoidCallback onGuest;
+  final bool isGoogleLoading;
+  final bool isGuestLoading;
+
+  const _MethodPickView({
+    required this.onGoogle,
+    required this.onEmail,
+    required this.onGuest,
+    required this.isGoogleLoading,
+    required this.isGuestLoading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Noray4Spacing.s6,
+        Noray4Spacing.s4,
+        Noray4Spacing.s6,
+        Noray4Spacing.s4,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _BrandHeader(),
+          const SizedBox(height: Noray4Spacing.s8 + Noray4Spacing.s4),
+          Text(
+            'Únete a\nla flota',
+            style: Noray4TextStyles.headlineL.copyWith(
+              color: Colors.white,
+              fontSize: 40,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.04 * 40,
+              height: 1.05,
+            ),
+          ),
+          const SizedBox(height: Noray4Spacing.s2),
+          Text(
+            'Elige cómo quieres registrarte.',
+            style: Noray4TextStyles.body.copyWith(
+              color: Noray4Colors.darkOnSurfaceVariant,
+              height: 1.5,
+            ),
+          ),
+          const Spacer(),
+          _GoogleButton(
+            onTap: () => onGoogle(),
+            isLoading: isGoogleLoading,
+          ),
+          const SizedBox(height: Noray4Spacing.s2),
+          _OutlineMethodButton(
+            label: 'Continuar con email',
+            icon: Symbols.alternate_email,
+            onTap: onEmail,
+          ),
+          const SizedBox(height: Noray4Spacing.s4),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 0.5,
+                  color: Noray4Colors.darkOutlineVariant,
+                ),
+              ),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: Noray4Spacing.s4),
+                child: Text(
+                  'O',
+                  style: Noray4TextStyles.label.copyWith(
+                    color: Noray4Colors.darkOutline,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Container(
+                  height: 0.5,
+                  color: Noray4Colors.darkOutlineVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Noray4Spacing.s2),
+          _GhostButton(onTap: onGuest, isLoading: isGuestLoading),
+          const SizedBox(height: Noray4Spacing.s2),
+        ],
+      ),
+    );
+  }
+}
+
+class _OutlineMethodButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _OutlineMethodButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        decoration: BoxDecoration(
+          color: Noray4Colors.darkSurfaceContainerLow,
+          borderRadius: Noray4Radius.primary,
+          border: Border.all(
+            color: Noray4Colors.darkOutlineVariant,
+            width: 0.5,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
             Text(
-              'CONECTA. RUEDA. VUELVE.',
-              style: Noray4TextStyles.label.copyWith(
-                color: Noray4Colors.darkOutline,
-                letterSpacing: 0.08 * 10,
+              label,
+              style: Noray4TextStyles.body.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
         ),
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: Noray4Radius.secondary,
-          ),
-          child: const Icon(
-            Symbols.explore,
-            color: Noray4Colors.darkBackground,
-            size: 22,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -717,18 +951,18 @@ class _HeroImage extends StatelessWidget {
   final String imageUrl;
   final _Step step;
 
-  const _HeroImage({required this.imageUrl, required this.step});
+  const _HeroImage({super.key, required this.imageUrl, required this.step});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: Noray4Spacing.s4),
+      padding: const EdgeInsets.symmetric(horizontal: Noray4Spacing.s2),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Image.network(
+            Image.asset(
               imageUrl,
               fit: BoxFit.cover,
               errorBuilder: (context, error, stack) => Container(
@@ -799,20 +1033,31 @@ class _StepDots extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const inactiveW = 6.0;
+    const activeW = 32.0;
+    const gap = Noray4Spacing.s2;
     return Row(
       children: [
         for (int i = 0; i < total; i++) ...[
-          if (i > 0) const SizedBox(width: Noray4Spacing.s2),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            height: 4,
-            width: i == active ? 28 : 6,
-            decoration: BoxDecoration(
-              color: i == active
-                  ? Colors.white
-                  : Noray4Colors.darkOutlineVariant,
-              borderRadius: Noray4Radius.pill,
-            ),
+          if (i > 0) const SizedBox(width: gap),
+          TweenAnimationBuilder<double>(
+            duration: const Duration(milliseconds: 420),
+            curve: Curves.easeOutCubic,
+            tween: Tween(end: i == active ? 1.0 : 0.0),
+            builder: (context, t, _) {
+              return Container(
+                height: 4,
+                width: inactiveW + (activeW - inactiveW) * t,
+                decoration: BoxDecoration(
+                  color: Color.lerp(
+                    Noray4Colors.darkOutlineVariant,
+                    Colors.white,
+                    t,
+                  ),
+                  borderRadius: Noray4Radius.pill,
+                ),
+              );
+            },
           ),
         ],
       ],
@@ -825,7 +1070,8 @@ class _StepDots extends StatelessWidget {
 class _PrimaryButton extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
-  const _PrimaryButton({required this.label, required this.onTap});
+  final bool isLoading;
+  const _PrimaryButton({required this.label, required this.onTap, this.isLoading = false});
 
   @override
   State<_PrimaryButton> createState() => _PrimaryButtonState();
@@ -837,29 +1083,53 @@ class _PrimaryButtonState extends State<_PrimaryButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
+      onTapDown: widget.isLoading ? null : (_) => setState(() => _pressed = true),
+      onTapUp: widget.isLoading
+          ? null
+          : (_) {
+              setState(() => _pressed = false);
+              widget.onTap();
+            },
+      onTapCancel: widget.isLoading ? null : () => setState(() => _pressed = false),
       child: AnimatedScale(
         scale: _pressed ? 0.98 : 1.0,
         duration: const Duration(milliseconds: 150),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: Noray4Radius.primary,
-          ),
-          child: Center(
-            child: Text(
-              widget.label,
-              style: Noray4TextStyles.body.copyWith(
-                color: Noray4Colors.darkBackground,
-                fontWeight: FontWeight.w600,
-              ),
+        child: AnimatedOpacity(
+          opacity: widget.isLoading ? 0.75 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            decoration: BoxDecoration(
+              color: Noray4Colors.darkAccent,
+              borderRadius: Noray4Radius.primary,
+              boxShadow: widget.isLoading
+                  ? const []
+                  : [
+                      BoxShadow(
+                        color: Noray4Colors.darkAccent.withValues(alpha: 0.25),
+                        blurRadius: 24,
+                        spreadRadius: -4,
+                      ),
+                    ],
+            ),
+            child: Center(
+              child: widget.isLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: Color(0xFF0C1C20),
+                      ),
+                    )
+                  : Text(
+                      widget.label,
+                      style: Noray4TextStyles.body.copyWith(
+                        color: const Color(0xFF0C1C20),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
             ),
           ),
         ),

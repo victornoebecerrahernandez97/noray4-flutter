@@ -1,7 +1,9 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:noray4/core/auth/auth_provider.dart';
 import 'package:noray4/core/theme/noray4_theme.dart';
@@ -22,6 +24,8 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
   final _modeloCtrl = TextEditingController(text: 'Honda CB500F');
   final _anioCtrl = TextEditingController(text: '2021');
   final _kilometrajeCtrl = TextEditingController(text: '18400');
+  bool _isSaving = false;
+  bool _isUploadingAvatar = false;
 
   @override
   void initState() {
@@ -52,7 +56,8 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
   }
 
   Future<void> _guardar() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_isSaving || !_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
     await ref.read(authProvider.notifier).updateProfile(
           nombre: _nombreCtrl.text.trim(),
           ciudad: _ciudadCtrl.text.trim(),
@@ -60,6 +65,7 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
         );
     await HapticFeedback.mediumImpact();
     if (!mounted) return;
+    setState(() => _isSaving = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -82,9 +88,43 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
     context.pop();
   }
 
+  Future<void> _cambiarFoto() async {
+    if (_isUploadingAvatar) return;
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 88,
+      maxWidth: 1200,
+      maxHeight: 1200,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _isUploadingAvatar = true);
+    try {
+      await ref.read(authProvider.notifier).uploadAvatarFile(picked.path);
+      await HapticFeedback.lightImpact();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'No se pudo subir la foto',
+              style: Noray4TextStyles.body
+                  .copyWith(color: Noray4Colors.darkPrimary),
+            ),
+            backgroundColor: Noray4Colors.darkSurfaceContainerHigh,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingAvatar = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final nombre = ref.watch(authProvider).user?.nombre ?? '';
+    final avatarUrl = ref.watch(authProvider).user?.avatarUrl;
     return Scaffold(
       backgroundColor: Noray4Colors.darkBackground,
       appBar: AppBar(
@@ -124,20 +164,75 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
             Center(
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 52,
-                    backgroundColor: Noray4Colors.darkSurfaceContainerHighest,
-                    child: Text(
-                      _initials(nombre),
-                      style: Noray4TextStyles.headlineL.copyWith(
-                        color: Noray4Colors.darkSecondary,
-                        fontWeight: FontWeight.w600,
+                  Container(
+                    width: 104,
+                    height: 104,
+                    decoration: BoxDecoration(
+                      color: Noray4Colors.darkSurfaceContainerHighest,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Noray4Colors.darkOutlineVariant
+                            .withValues(alpha: 0.3),
+                        width: 0.5,
                       ),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (avatarUrl != null && avatarUrl.isNotEmpty)
+                          CachedNetworkImage(
+                            imageUrl: avatarUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (ctx, url) => Center(
+                              child: Text(
+                                _initials(nombre),
+                                style: Noray4TextStyles.headlineL.copyWith(
+                                  color: Noray4Colors.darkSecondary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            errorWidget: (ctx, url, err) => Center(
+                              child: Text(
+                                _initials(nombre),
+                                style: Noray4TextStyles.headlineL.copyWith(
+                                  color: Noray4Colors.darkSecondary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Center(
+                            child: Text(
+                              _initials(nombre),
+                              style: Noray4TextStyles.headlineL.copyWith(
+                                color: Noray4Colors.darkSecondary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        if (_isUploadingAvatar)
+                          Container(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            child: const Center(
+                              child: SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: Noray4Colors.darkPrimary,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: Noray4Spacing.s2),
                   TextButton(
-                    onPressed: () {},
+                    onPressed: _isUploadingAvatar ? null : _cambiarFoto,
                     style: TextButton.styleFrom(
                       foregroundColor: Noray4Colors.darkSecondary,
                       padding: const EdgeInsets.symmetric(
@@ -239,23 +334,35 @@ class _EditarPerfilScreenState extends ConsumerState<EditarPerfilScreen> {
             const SizedBox(height: Noray4Spacing.s8),
 
             // Guardar
-            SizedBox(
-              width: double.infinity,
-              child: TextButton(
-                onPressed: _guardar,
-                style: TextButton.styleFrom(
-                  backgroundColor: Noray4Colors.darkPrimary,
-                  foregroundColor: Noray4Colors.darkBackground,
+            GestureDetector(
+              onTap: _guardar,
+              child: AnimatedOpacity(
+                opacity: _isSaving ? 0.7 : 1.0,
+                duration: const Duration(milliseconds: 150),
+                child: Container(
+                  width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 20),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                  decoration: const BoxDecoration(
+                    color: Noray4Colors.darkPrimary,
+                    borderRadius: Noray4Radius.primary,
                   ),
-                ),
-                child: Text(
-                  'Guardar cambios',
-                  style: Noray4TextStyles.body.copyWith(
-                    color: Noray4Colors.darkBackground,
-                    fontWeight: FontWeight.w600,
+                  child: Center(
+                    child: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: Color(0xFF0C1C20),
+                            ),
+                          )
+                        : Text(
+                            'Guardar cambios',
+                            style: Noray4TextStyles.body.copyWith(
+                              color: Noray4Colors.darkBackground,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                   ),
                 ),
               ),

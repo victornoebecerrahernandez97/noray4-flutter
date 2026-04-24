@@ -1,5 +1,36 @@
 enum SalaTab { mapa, chat, voz, archivos }
 
+// ─── SalaFoto ─────────────────────────────────────────────────────────────────
+
+class SalaFoto {
+  final String url;
+  final String thumbUrl;
+  final String publicId;
+  final String riderId;
+  final String? caption;
+  final String takenAt;
+
+  const SalaFoto({
+    required this.url,
+    required this.thumbUrl,
+    required this.publicId,
+    required this.riderId,
+    this.caption,
+    required this.takenAt,
+  });
+
+  factory SalaFoto.fromJson(Map<String, dynamic> json) => SalaFoto(
+        url: json['url'] as String,
+        thumbUrl: json['thumb_url'] as String,
+        publicId: json['public_id'] as String,
+        riderId: json['rider_id'] as String,
+        caption: json['caption'] as String?,
+        takenAt: json['taken_at'] as String,
+      );
+}
+
+// ─── SalaMessage ──────────────────────────────────────────────────────────────
+
 class SalaMessage {
   final String id;
   final String sender;
@@ -7,7 +38,11 @@ class SalaMessage {
   final String text;
   final String time;
   final bool isOutgoing;
+  final String type; // text | image
   final String? mediaUrl;
+  final String? mediaThumbUrl;
+  final bool edited;
+  final bool deleted;
 
   const SalaMessage({
     required this.id,
@@ -16,7 +51,11 @@ class SalaMessage {
     required this.text,
     required this.time,
     required this.isOutgoing,
+    this.type = 'text',
     this.mediaUrl,
+    this.mediaThumbUrl,
+    this.edited = false,
+    this.deleted = false,
   });
 
   factory SalaMessage.fromApi(Map<String, dynamic> json, String myRiderId) {
@@ -31,10 +70,31 @@ class SalaMessage {
       text: json['content'] as String? ?? '',
       time: time,
       isOutgoing: riderId == myRiderId,
+      type: json['type'] as String? ?? 'text',
       mediaUrl: json['media_url'] as String?,
+      mediaThumbUrl: json['media_thumb_url'] as String?,
+      edited: json['edited'] as bool? ?? false,
+      deleted: json['deleted'] as bool? ?? false,
     );
   }
+
+  SalaMessage copyWith({String? text, bool? edited, bool? deleted}) =>
+      SalaMessage(
+        id: id,
+        sender: sender,
+        riderId: riderId,
+        text: text ?? this.text,
+        time: time,
+        isOutgoing: isOutgoing,
+        type: type,
+        mediaUrl: mediaUrl,
+        mediaThumbUrl: mediaThumbUrl,
+        edited: edited ?? this.edited,
+        deleted: deleted ?? this.deleted,
+      );
 }
+
+// ─── SalaRider ────────────────────────────────────────────────────────────────
 
 class SalaRider {
   final String initials;
@@ -62,6 +122,8 @@ class SalaRider {
     );
   }
 }
+
+// ─── RiderPosition ────────────────────────────────────────────────────────────
 
 class RiderPosition {
   final String riderId;
@@ -95,31 +157,37 @@ class RiderPosition {
       DateTime.now().difference(updatedAt).inSeconds > 30;
 }
 
+// ─── SalaState ────────────────────────────────────────────────────────────────
+
 class SalaState {
   final String salaId;
   final String nombre;
+  final String ownerId;
   final SalaTab activeTab;
   final List<SalaMessage> messages;
   final List<SalaRider> riders;
+  final List<SalaFoto> fotos;
   final String tiempo;
   final String distancia;
   final bool isPttActive;
   final bool isVoiceActive;
   final bool isLoading;
   final String? error;
-  // ── Tiempo real ─────────────────────────────────────────────────────────────
   final Map<String, RiderPosition> lastPositions;
   final String? activeSpeakerId;
   final String? activeSpeakerName;
   final bool wsConnected;
   final bool gpsActive;
+  final Set<String> onlineRiderIds;
 
   const SalaState({
     required this.salaId,
     this.nombre = '',
+    this.ownerId = '',
     this.activeTab = SalaTab.mapa,
     this.messages = const [],
     this.riders = const [],
+    this.fotos = const [],
     this.tiempo = '0h 00m',
     this.distancia = '0 km',
     this.isPttActive = false,
@@ -131,13 +199,16 @@ class SalaState {
     this.activeSpeakerName,
     this.wsConnected = false,
     this.gpsActive = false,
+    this.onlineRiderIds = const {},
   });
 
   SalaState copyWith({
     String? nombre,
+    String? ownerId,
     SalaTab? activeTab,
     List<SalaMessage>? messages,
     List<SalaRider>? riders,
+    List<SalaFoto>? fotos,
     bool? isPttActive,
     bool? isVoiceActive,
     String? tiempo,
@@ -150,13 +221,16 @@ class SalaState {
     String? activeSpeakerName,
     bool? wsConnected,
     bool? gpsActive,
+    Set<String>? onlineRiderIds,
   }) =>
       SalaState(
         salaId: salaId,
         nombre: nombre ?? this.nombre,
+        ownerId: ownerId ?? this.ownerId,
         activeTab: activeTab ?? this.activeTab,
         messages: messages ?? this.messages,
         riders: riders ?? this.riders,
+        fotos: fotos ?? this.fotos,
         tiempo: tiempo ?? this.tiempo,
         distancia: distancia ?? this.distancia,
         isPttActive: isPttActive ?? this.isPttActive,
@@ -164,9 +238,13 @@ class SalaState {
         isLoading: isLoading ?? this.isLoading,
         error: error,
         lastPositions: lastPositions ?? this.lastPositions,
-        activeSpeakerId: clearActiveSpeaker ? null : (activeSpeakerId ?? this.activeSpeakerId),
-        activeSpeakerName: clearActiveSpeaker ? null : (activeSpeakerName ?? this.activeSpeakerName),
+        activeSpeakerId:
+            clearActiveSpeaker ? null : (activeSpeakerId ?? this.activeSpeakerId),
+        activeSpeakerName: clearActiveSpeaker
+            ? null
+            : (activeSpeakerName ?? this.activeSpeakerName),
         wsConnected: wsConnected ?? this.wsConnected,
         gpsActive: gpsActive ?? this.gpsActive,
+        onlineRiderIds: onlineRiderIds ?? this.onlineRiderIds,
       );
 }
